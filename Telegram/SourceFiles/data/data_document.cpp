@@ -119,14 +119,10 @@ QString FileNameUnsafe(
 		const QDir &dir) {
 	name = base::FileNameFromUserString(name);
 	if (Core::App().settings().askDownloadPath() || savingAs) {
+		// AyuGram: the dialog starts in the last used folder (like photos do),
+		// not in the folder of an already downloaded copy of the file.
 		if (!name.isEmpty() && name.at(0) == QChar::fromLatin1('.')) {
 			name = filedialogDefaultName(prefix, name);
-		} else if (dir.path() != u"."_q) {
-			QString path = dir.absolutePath();
-			if (path != cDialogLastPath()) {
-				cSetDialogLastPath(path);
-				Local::writeSettings();
-			}
 		}
 
 		// check if extension of filename is present in filter
