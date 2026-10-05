@@ -282,6 +282,8 @@ private:
 		not_null<Data::Forum*> forum,
 		const Window::SectionShow &params);
 	void closeChildList(anim::type animated);
+	void rememberSearchBeforeSubsection();
+	void restoreSearchBeforeSubsection();
 
 	void fullSearchRefreshOn(rpl::producer<> events);
 	void updateCancelSearch();
@@ -404,6 +406,10 @@ private:
 	bool _searchHasFocus = false;
 	bool _searchEngaged = false;
 	bool _processingSearch = false;
+
+	// AyuGram: search to bring back after leaving a subsection opened from it.
+	std::optional<SearchState> _searchBeforeSubsection;
+	bool _changingSubsection = false;
 
 	rpl::event_stream<rpl::producer<Stories::Content>> _storiesContents;
 	base::flat_map<PeerId, Ui::PeerUserpicView> _storiesUserpicsViewsHidden;

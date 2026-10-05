@@ -833,6 +833,7 @@ Widget::Widget(
 				changeOpenedForum(nullptr, anim::type::normal);
 			} else if (_childList) {
 				closeChildList(anim::type::normal);
+				restoreSearchBeforeSubsection(); // AyuGram
 			}
 		}, lifetime());
 
@@ -2326,7 +2327,12 @@ void Widget::changeOpenedSubsection(
 	//_scroll->verticalScrollBar()->setMinimum(0);
 	_showAnimation = nullptr;
 	destroyChildListCanvas();
-	change();
+	{
+		// AyuGram: don't restore search from nested subsection changes.
+		const auto was = std::exchange(_changingSubsection, true);
+		change();
+		_changingSubsection = was;
+	}
 	refreshTopBars();
 	updateSuggestions(anim::type::instant);
 	updateControlsVisibility(true);
@@ -2355,6 +2361,8 @@ void Widget::destroyChildListCanvas() {
 void Widget::changeOpenedFolder(Data::Folder *folder, anim::type animated) {
 	if (_openedFolder == folder) {
 		return;
+	} else if (folder) {
+		rememberSearchBeforeSubsection(); // AyuGram
 	}
 	changeOpenedSubsection([&] {
 		cancelSearch({ .forceFullCancel = true });
@@ -2369,6 +2377,9 @@ void Widget::changeOpenedFolder(Data::Folder *folder, anim::type animated) {
 		updateFrozenAccountBar();
 		updateTopBarSuggestions();
 	}, (folder != nullptr), animated);
+	if (!folder) {
+		restoreSearchBeforeSubsection(); // AyuGram
+	}
 }
 
 void Widget::storiesExplicitCollapse() {
@@ -2411,6 +2422,8 @@ void Widget::collectStoriesUserpicsViews(Data::StorySourcesList list) {
 void Widget::changeOpenedForum(Data::Forum *forum, anim::type animated) {
 	if (_openedForum == forum) {
 		return;
+	} else if (forum) {
+		rememberSearchBeforeSubsection(); // AyuGram
 	}
 	changeOpenedSubsection([&] {
 		cancelSearch({ .forceFullCancel = true });
@@ -2427,6 +2440,9 @@ void Widget::changeOpenedForum(Data::Forum *forum, anim::type animated) {
 		updateTopBarSuggestions();
 		updateStoriesVisibility();
 	}, (forum != nullptr), animated);
+	if (!forum) {
+		restoreSearchBeforeSubsection(); // AyuGram
+	}
 }
 
 void Widget::changeOpenedCommunity(
@@ -2434,6 +2450,8 @@ void Widget::changeOpenedCommunity(
 		anim::type animated) {
 	if (_openedCommunity == community) {
 		return;
+	} else if (community) {
+		rememberSearchBeforeSubsection(); // AyuGram
 	}
 	changeOpenedSubsection([&] {
 		cancelSearch({ .forceFullCancel = true });
@@ -2446,6 +2464,9 @@ void Widget::changeOpenedCommunity(
 		updateCommunityRequestsBubble();
 		updateCommunityAddChatButton();
 	}, (community != nullptr), animated);
+	if (!community) {
+		restoreSearchBeforeSubsection(); // AyuGram
+	}
 }
 
 void Widget::hideChildList() {
@@ -4077,6 +4098,7 @@ void Widget::showForum(
 		changeOpenedForum(forum, params.animated);
 		return;
 	}
+	rememberSearchBeforeSubsection(); // AyuGram
 	cancelSearch({ .forceFullCancel = true });
 	openChildList(forum, params);
 }
@@ -4198,6 +4220,36 @@ void Widget::closeChildList(anim::type animated) {
 	}
 	updateStoriesVisibility();
 	updateForceDisplayWide();
+}
+
+// AyuGram: opening a folder / forum / community from search results used to
+// drop the search, so going back showed the plain chats list.
+void Widget::rememberSearchBeforeSubsection() {
+	if (_layout != Layout::Main
+		|| _changingSubsection
+		|| _openedFolder
+		|| _openedForum
+		|| _openedCommunity) {
+		return;
+	}
+	_searchBeforeSubsection = (!_searchState.query.isEmpty()
+		&& !_searchState.inChat)
+		? std::make_optional(_searchState)
+		: std::nullopt;
+}
+
+void Widget::restoreSearchBeforeSubsection() {
+	if (_layout != Layout::Main
+		|| _changingSubsection
+		|| _openedFolder
+		|| _openedForum
+		|| _openedCommunity
+		|| _childList) {
+		return;
+	}
+	if (auto state = base::take(_searchBeforeSubsection)) {
+		applySearchState(std::move(*state));
+	}
 }
 
 bool Widget::applySearchState(SearchState state) {
