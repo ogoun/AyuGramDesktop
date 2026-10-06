@@ -160,6 +160,21 @@ void EditExceptions(
 	const auto showLimitReached = [=] {
 		window->show(Box(FilterChatsLimitBox, session, limit, include));
 	};
+	// AyuGram: chats of locked protected folders are not shown in other
+	// folders' settings, but they are kept in the folder on save.
+	auto shown = include ? rules.always() : rules.never();
+	auto hidden = base::flat_set<not_null<History*>>();
+	const auto &lock = session->data().chatsFilters().folderLock();
+	if (!lock.isProtected(rules.id())) {
+		for (const auto &history : shown) {
+			if (lock.isLocked(history)) {
+				hidden.emplace(history);
+			}
+		}
+		for (const auto &history : hidden) {
+			shown.remove(history);
+		}
+	}
 	auto controller = std::make_unique<EditFilterChatsListController>(
 		session,
 		(include
@@ -167,7 +182,7 @@ void EditExceptions(
 			: tr::lng_filters_exclude_title()),
 		options,
 		rules.flags() & options,
-		include ? rules.always() : rules.never(),
+		shown,
 		limit,
 		showLimitReached);
 	const auto rawController = controller.get();
@@ -185,6 +200,9 @@ void EditExceptions(
 				histories.begin(),
 				histories.end()
 			};
+			for (const auto &history : hidden) {
+				changed.emplace(history); // AyuGram: keep hidden ones.
+			}
 			auto removeFrom = include ? rules.never() : rules.always();
 			for (const auto &history : changed) {
 				removeFrom.remove(history);

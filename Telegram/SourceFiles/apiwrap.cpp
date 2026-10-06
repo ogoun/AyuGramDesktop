@@ -66,6 +66,7 @@ https://github.com/telegramdesktop/tdesktop/blob/master/LEGAL
 #include "data/data_chat.h"
 #include "data/data_user.h"
 #include "data/data_chat_filters.h"
+#include "ayu/features/folder_lock/folder_lock.h" // AyuGram
 #include "data/data_histories.h"
 #include "data/data_history_messages.h"
 #include "core/core_cloud_password.h"
@@ -511,7 +512,10 @@ void ApiWrap::toggleHistoryArchived(
 					if (const auto controller = window->sessionController()) {
 						const auto filters = &_session->data().chatsFilters();
 						const auto lookup_id = filters->lookupId(controller->session().premium() ? 0 : 1);
-						controller->setActiveChatsFilter(lookup_id);
+						controller->setActiveChatsFilter(
+							filters->folderLock().isLocked(lookup_id)
+								? filters->defaultId()
+								: lookup_id); // AyuGram
 					}
 				}
 			} else {

@@ -22,6 +22,8 @@
 #include "window/window_controller.h"
 
 #include <fstream>
+#include <QtCore/QDateTime>
+#include <QtCore/QFile>
 #include <QApplication>
 
 using json = nlohmann::json;
@@ -402,6 +404,12 @@ void AyuSettings::load() {
 		}
 	} catch (...) {
 		LOG(("AyuGramSettings: failed to read settings file (not json-like)"));
+		// AyuGram: the next save() would overwrite it, keep a copy (it may
+		// hold folder protection records).
+		const auto path = QString::fromStdString(getSettingsPath());
+		QFile::copy(
+			path,
+			path + u".broken-%1"_q.arg(QDateTime::currentSecsSinceEpoch()));
 	}
 
 	if (cGhost()) {
@@ -1293,6 +1301,94 @@ void to_json(nlohmann::json &j, const AyuSettings &s) {
 void from_json(const nlohmann::json &j, AyuSettings &s) {
 	AyuSettings defaults;
 
+	// AyuGram: protection first, each in its own try, so that a failure in
+	// other settings can't drop it (that would reveal hidden chats).
+	try {
+		if (j.contains("foldersHiddenFromAllChats")
+			&& j["foldersHiddenFromAllChats"].is_object()) {
+			s._foldersHiddenFromAllChats.clear();
+			for (auto &[key, value]
+					: j["foldersHiddenFromAllChats"].items()) {
+				try {
+					if (value.is_array()) {
+						s._foldersHiddenFromAllChats[std::stoull(key)]
+							= value.get<std::set<int>>();
+					}
+				} catch (...) {
+				}
+			}
+		}
+	} catch (...) {
+	}
+	try {
+		if (j.contains("folderProtection") && j["folderProtection"].is_object()) {
+			s._folderProtection.clear();
+			const auto bytes = [](const nlohmann::json &value) {
+				return value.is_string()
+					? QByteArray::fromBase64(
+						QByteArray::fromStdString(value.get<std::string>()))
+					: QByteArray();
+			};
+			const auto number = [](
+					const nlohmann::json &object,
+					const char *key,
+					auto fallback) {
+				const auto i = object.find(key);
+				return (i != object.end() && i->is_number_integer())
+					? i->get<decltype(fallback)>()
+					: fallback;
+			};
+			for (auto &[userKey, folders] : j["folderProtection"].items()) {
+				auto userId = uint64();
+				try {
+					userId = std::stoull(userKey);
+				} catch (...) {
+					continue;
+				}
+				if (!folders.is_object()) {
+					continue;
+				}
+				for (auto &[filterKey, value] : folders.items()) {
+					auto filterId = 0;
+					try {
+						filterId = std::stoi(filterKey);
+					} catch (...) {
+						continue;
+					}
+					// A damaged record is kept as is (empty / wrong slots):
+					// the folder then stays protected and can't be opened.
+					auto r = FolderProtectionRecord();
+					if (value.is_object()) {
+						r.autolockMinutes = number(value, "autolockMinutes", 15);
+						r.salt = bytes(value.value("salt", nlohmann::json()));
+						const auto kdf = value.value(
+							"kdf",
+							nlohmann::json::object());
+						if (kdf.is_object()) {
+							r.kdfN = number(kdf, "N", uint64(0));
+							r.kdfR = number(kdf, "r", uint64(0));
+							r.kdfP = number(kdf, "p", uint64(0));
+						}
+						const auto slots = value.value(
+							"slots",
+							nlohmann::json::array());
+						for (auto i = 0; i != 2; ++i) {
+							r.slots[i] = (slots.is_array()
+								&& slots.size() > size_t(i))
+								? bytes(slots[i])
+								: QByteArray();
+						}
+						r.badTries = number(value, "badTries", 0);
+						r.lastBadTry = number(value, "lastBadTry", int64(0));
+					}
+					s._folderProtection[userId][filterId] = std::move(r);
+				}
+			}
+		}
+	} catch (...) {
+	}
+
+
 	if (j.contains("ghostModeSettings") && j["ghostModeSettings"].is_object()) {
 		s._ghostAccounts.clear();
 		for (auto &[key, value] : j["ghostModeSettings"].items()) {
@@ -1391,82 +1487,6 @@ void from_json(const nlohmann::json &j, AyuSettings &s) {
 	s._singleCornerRadius = j.value("singleCornerRadius", defaults._singleCornerRadius.current());
 	s._streamerMode = j.value("streamerMode", defaults._streamerMode.current());
 	s._peerSearchMode = j.value("peerSearchMode", defaults._peerSearchMode.current());
-
-	if (j.contains("foldersHiddenFromAllChats")
-		&& j["foldersHiddenFromAllChats"].is_object()) {
-		s._foldersHiddenFromAllChats.clear();
-		for (auto &[key, value] : j["foldersHiddenFromAllChats"].items()) {
-			if (value.is_array()) {
-				s._foldersHiddenFromAllChats[std::stoull(key)]
-					= value.get<std::set<int>>();
-			}
-		}
-	}
-
-	if (j.contains("folderProtection") && j["folderProtection"].is_object()) {
-		s._folderProtection.clear();
-		const auto bytes = [](const nlohmann::json &value) {
-			return value.is_string()
-				? QByteArray::fromBase64(
-					QByteArray::fromStdString(value.get<std::string>()))
-				: QByteArray();
-		};
-		const auto number = [](
-				const nlohmann::json &object,
-				const char *key,
-				auto fallback) {
-			const auto i = object.find(key);
-			return (i != object.end() && i->is_number_integer())
-				? i->get<decltype(fallback)>()
-				: fallback;
-		};
-		for (auto &[userKey, folders] : j["folderProtection"].items()) {
-			auto userId = uint64();
-			try {
-				userId = std::stoull(userKey);
-			} catch (...) {
-				continue;
-			}
-			if (!folders.is_object()) {
-				continue;
-			}
-			for (auto &[filterKey, value] : folders.items()) {
-				auto filterId = 0;
-				try {
-					filterId = std::stoi(filterKey);
-				} catch (...) {
-					continue;
-				}
-				// A damaged record is kept as is (empty / wrong slots):
-				// the folder then stays protected and can't be opened.
-				auto r = FolderProtectionRecord();
-				if (value.is_object()) {
-					r.autolockMinutes = number(value, "autolockMinutes", 15);
-					r.salt = bytes(value.value("salt", nlohmann::json()));
-					const auto kdf = value.value(
-						"kdf",
-						nlohmann::json::object());
-					if (kdf.is_object()) {
-						r.kdfN = number(kdf, "N", uint64(0));
-						r.kdfR = number(kdf, "r", uint64(0));
-						r.kdfP = number(kdf, "p", uint64(0));
-					}
-					const auto slots = value.value(
-						"slots",
-						nlohmann::json::array());
-					for (auto i = 0; i != 2; ++i) {
-						r.slots[i] = (slots.is_array()
-							&& slots.size() > size_t(i))
-							? bytes(slots[i])
-							: QByteArray();
-					}
-					r.badTries = number(value, "badTries", 0);
-					r.lastBadTry = number(value, "lastBadTry", int64(0));
-				}
-				s._folderProtection[userId][filterId] = std::move(r);
-			}
-		}
-	}
 
 	if (j.contains("messageShotSettings") && j["messageShotSettings"].is_object()) {
 		j["messageShotSettings"].get_to(s._messageShotSettings);

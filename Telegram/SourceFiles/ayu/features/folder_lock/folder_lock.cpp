@@ -94,21 +94,27 @@ uint64 FolderLock::userId() const {
 }
 
 void FolderLock::refreshProtected(bool notify) {
+	if (_refreshing) {
+		return; // Re-entered from our own stale records purge below.
+	}
 	auto &settings = AyuSettings::getInstance();
 	const auto &filters = _session->data().chatsFilters();
-	const auto records = settings.folderProtectionIds(userId());
-	const auto wasAwaiting = _awaitingRules;
-	_awaitingRules = !records.empty() && !filters.loaded();
-	if (notify && !_awaitingRules && filters.loaded()) {
+	auto records = settings.folderProtectionIds(userId());
+	if (notify && filters.loaded()) {
 		// Records of folders removed while offline: a new folder may get
 		// the same id later.
+		_refreshing = true;
 		for (const auto id : records) {
 			if (!ranges::contains(filters.list(), id, &Data::ChatFilter::id)) {
 				settings.setFolderProtection(userId(), id, std::nullopt);
-				return; // Re-entered through folderProtectionChanges().
 			}
 		}
+		_refreshing = false;
+		records = settings.folderProtectionIds(userId());
 	}
+	const auto wasAwaiting = _awaitingRules;
+	_awaitingRules = !records.empty() && !filters.loaded();
+
 	auto now = base::flat_set<FilterId>();
 	for (const auto &filter : filters.list()) {
 		if (filter.id() && settings.folderProtection(userId(), filter.id())) {
@@ -125,10 +131,13 @@ void FolderLock::refreshProtected(bool notify) {
 	const auto added = ranges::any_of(now, [&](FilterId id) {
 		return !_protected.contains(id);
 	});
-	const auto changed = (now != _protected)
-		|| (wasAwaiting != _awaitingRules);
+	const auto protectedChanged = (now != _protected);
 	_protected = std::move(now);
-	if (notify && changed) {
+	if (protectedChanged) {
+		// A PIN was set or removed, not a change of the folder rules.
+		_rules = collectRules();
+	}
+	if (notify && (protectedChanged || (wasAwaiting != _awaitingRules))) {
 		applyChanged(added);
 	}
 }
@@ -386,9 +395,18 @@ auto FolderLock::collectRules() const -> base::flat_map<FilterId, Rules> {
 	for (const auto &filter : _session->data().chatsFilters().list()) {
 		if (isProtected(filter.id())) {
 			using Flag = Data::ChatFilter::Flag;
+			// Pinned chats come inside always(), pinning a chat that is in
+			// the folder by its type anyway doesn't change what is hidden.
+			auto always = filter.always();
+			for (const auto &history : filter.pinned()) {
+				if (filter.matchesByType(history)
+					&& !filter.never().contains(history)) {
+					always.remove(history);
+				}
+			}
 			result.emplace(filter.id(), Rules{
 				.flags = (filter.flags() & Flag::RulesMask),
-				.always = filter.always(),
+				.always = std::move(always),
 				.never = filter.never(),
 			});
 		}

@@ -76,6 +76,7 @@ https://github.com/telegramdesktop/tdesktop/blob/master/LEGAL
 #include "ayu/ayu_settings.h"
 #include "boxes/peers/edit_participants_box.h"
 #include "data/data_chat_filters.h"
+#include "ayu/features/folder_lock/folder_lock.h" // AyuGram
 #include "history/admin_log/history_admin_log_section.h"
 #include "styles/style_ayu_styles.h"
 #include "styles/style_ayu_icons.h"
@@ -900,7 +901,10 @@ void TopBarWidget::backClicked() {
 		if (settings.hideAllChatsFolder()) {
 			const auto filters = &_controller->session().data().chatsFilters();
 			const auto lookupId = filters->lookupId(_controller->session().premium() ? 0 : 1);
-			_controller->setActiveChatsFilter(lookupId);
+			_controller->setActiveChatsFilter(
+				filters->folderLock().isLocked(lookupId)
+					? filters->defaultId()
+					: lookupId); // AyuGram
 		} else {
 			_controller->closeFolder();
 		}

@@ -398,6 +398,10 @@ bool ChatFilter::matchesRules(not_null<History*> history) const {
 	} else if (_always.contains(history)) {
 		return true;
 	}
+	return matchesByType(history);
+}
+
+bool ChatFilter::matchesByType(not_null<History*> history) const {
 	const auto peer = history->peer;
 	const auto channel = peer->asChannel();
 	if (channel && channel->isCommunity()) {

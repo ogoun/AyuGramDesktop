@@ -443,7 +443,11 @@ void FiltersMenu::refresh() {
 
 	if (settings.hideAllChatsFolder()
 		&& _session->widget()->sessionContent()) {
-		_session->setActiveChatsFilter(filters->lookupId(0));
+		// AyuGram: not a locked protected folder.
+		const auto id = filters->lookupId(0);
+		_session->setActiveChatsFilter(filters->folderLock().isLocked(id)
+			? filters->defaultId()
+			: id);
 	}
 
 	if (refocus) {

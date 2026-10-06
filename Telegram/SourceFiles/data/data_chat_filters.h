@@ -105,6 +105,8 @@ public:
 		bool ignoreFakeUnread = false) const;
 	// AyuGram: rules without the dynamic NoMuted / NoRead / NoArchived.
 	[[nodiscard]] bool matchesRules(not_null<History*> history) const;
+	// AyuGram: by the chat type flags only.
+	[[nodiscard]] bool matchesByType(not_null<History*> history) const;
 
 private:
 	FilterId _id = 0;

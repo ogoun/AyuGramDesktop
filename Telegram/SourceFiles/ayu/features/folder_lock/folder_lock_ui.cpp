@@ -396,7 +396,8 @@ static void CloseLockedChatsInWindowsNow(not_null<Main::Session*> session) {
 	// A locked folder can't stay the active tab.
 	for (const auto &window : session->windows()) {
 		if (lock.isLocked(window->activeChatsFilterCurrent())) {
-			window->setActiveChatsFilter(0);
+			window->setActiveChatsFilter(
+				session->data().chatsFilters().defaultId());
 		}
 	}
 }

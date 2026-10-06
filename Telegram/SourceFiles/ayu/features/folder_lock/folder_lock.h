@@ -98,6 +98,7 @@ private:
 	// Protection records exist but the folders (rules) aren't loaded yet:
 	// everything is treated as locked until they are.
 	bool _awaitingRules = false;
+	bool _refreshing = false;
 	base::flat_map<FilterId, Rules> _rules;
 	rpl::event_stream<> _lockChanges;
 	base::Timer _autolockTimer;

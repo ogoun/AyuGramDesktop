@@ -40,15 +40,13 @@ https://github.com/telegramdesktop/tdesktop/blob/master/LEGAL
 #include "styles/style_media_player.h" // mediaPlayerMenuCheck
 #include "styles/style_menu_icons.h"
 
-// AyuGram includes
-#include "ayu/features/folder_lock/folder_lock.h"
-#include "data/data_chat_filters.h"
-#include "dialogs/dialogs_common.h"
-
 #include <QScrollBar>
 
 // AyuGram includes
 #include "ayu/ayu_settings.h"
+#include "ayu/features/folder_lock/folder_lock.h"
+#include "data/data_chat_filters.h"
+#include "dialogs/dialogs_common.h"
 
 
 namespace Ui {
