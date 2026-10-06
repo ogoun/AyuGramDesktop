@@ -397,6 +397,7 @@ public:
 	[[nodiscard]] std::optional<FolderProtectionRecord> folderProtection(
 		uint64 userId,
 		int filterId) const;
+	[[nodiscard]] std::vector<int> folderProtectionIds(uint64 userId) const;
 	void setFolderProtection(
 		uint64 userId,
 		int filterId,

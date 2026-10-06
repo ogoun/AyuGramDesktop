@@ -63,6 +63,10 @@ https://github.com/telegramdesktop/tdesktop/blob/master/LEGAL
 #include "styles/style_media_view.h"
 #include "styles/style_userpic_button.h"
 
+// AyuGram includes
+#include "ayu/features/folder_lock/folder_lock.h"
+#include "data/data_chat_filters.h"
+
 #include <QtGui/QWindow>
 
 namespace Media::Stories {
@@ -758,7 +762,14 @@ void Controller::rebuildFromContext(
 		hideSiblings();
 	}, [&](StorySourcesList list) {
 		source = stories.source(peerId);
-		const auto &sources = stories.sources(list);
+		const auto &allSources = stories.sources(list);
+		// AyuGram: no stories of locked protected folders' chats.
+		const auto &lock = peer->owner().chatsFilters().folderLock();
+		const auto sources = allSources | ranges::views::filter([&](
+				const StoriesSourceInfo &info) {
+			return (info.id == storyId.peer)
+				|| !lock.isLocked(peer->owner().peer(info.id));
+		}) | ranges::to_vector;
 		const auto i = ranges::find(
 			sources,
 			storyId.peer,

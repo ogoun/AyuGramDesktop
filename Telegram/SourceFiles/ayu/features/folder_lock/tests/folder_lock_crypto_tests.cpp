@@ -102,15 +102,32 @@ void TestCheckPin() {
 	AYU_CHECK(CheckPin(unicode, salt, kFast, filterId, slotsU).ok);
 }
 
+// The argument is the count of wrong PINs in a row: three free attempts,
+// the fourth one waits 5 seconds.
 void TestRetryDelay() {
 	AYU_CHECK(RetryDelaySeconds(0) == 0);
-	AYU_CHECK(RetryDelaySeconds(3) == 0);
-	AYU_CHECK(RetryDelaySeconds(4) == 5);
-	AYU_CHECK(RetryDelaySeconds(5) == 10);
-	AYU_CHECK(RetryDelaySeconds(6) == 20);
-	AYU_CHECK(RetryDelaySeconds(7) == 40);
-	AYU_CHECK(RetryDelaySeconds(8) == 60);
+	AYU_CHECK(RetryDelaySeconds(2) == 0);
+	AYU_CHECK(RetryDelaySeconds(3) == 5);
+	AYU_CHECK(RetryDelaySeconds(4) == 10);
+	AYU_CHECK(RetryDelaySeconds(5) == 20);
+	AYU_CHECK(RetryDelaySeconds(6) == 40);
+	AYU_CHECK(RetryDelaySeconds(7) == 60);
 	AYU_CHECK(RetryDelaySeconds(100) == 60);
+}
+
+// A broken record (bad KDF parameters) is a failure, not a wrong PIN.
+void TestKdfFailure() {
+	const auto salt = RandomBytes(kSaltSize);
+	const auto broken = KdfParams{ .n = 0, .r = 8, .p = 1 };
+	AYU_CHECK(DeriveKey("first-pin", salt, 0, broken).isEmpty());
+	const auto slots = std::array<QByteArray, 2>{
+		RandomBytes(kSlotSize),
+		RandomBytes(kSlotSize),
+	};
+	const auto result = CheckPin("first-pin", salt, broken, 1, slots);
+	AYU_CHECK(!result.ok && result.failed);
+	const auto wrong = CheckPin("first-pin", salt, kFast, 1, slots);
+	AYU_CHECK(!wrong.ok && !wrong.failed);
 }
 
 void TestWipe() {
@@ -126,6 +143,7 @@ int main() {
 	TestSealOpen();
 	TestCheckPin();
 	TestRetryDelay();
+	TestKdfFailure();
 	TestWipe();
 	if (Failed) {
 		std::printf("FAILED: %d\n", Failed);

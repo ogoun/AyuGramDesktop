@@ -8,6 +8,7 @@
 
 #include "base/timer.h"
 #include "base/weak_ptr.h"
+#include "data/data_chat_filters.h"
 
 class History;
 class PeerData;
@@ -71,8 +72,16 @@ private:
 	struct Unlocked {
 		int slot = 0;
 	};
+	struct Rules {
+		Data::ChatFilter::Flags flags;
+		base::flat_set<not_null<History*>> always;
+		base::flat_set<not_null<History*>> never;
+
+		friend inline bool operator==(const Rules &, const Rules &) = default;
+	};
 
 	void refreshProtected(bool notify);
+	[[nodiscard]] base::flat_map<FilterId, Rules> collectRules() const;
 	void applyChanged(bool locking);
 	void cleanupLocked();
 	void checkAutolock();
@@ -86,6 +95,10 @@ private:
 	base::flat_set<FilterId> _protected;
 	base::flat_map<FilterId, Unlocked> _unlocked;
 	base::flat_set<FilterId> _checking;
+	// Protection records exist but the folders (rules) aren't loaded yet:
+	// everything is treated as locked until they are.
+	bool _awaitingRules = false;
+	base::flat_map<FilterId, Rules> _rules;
 	rpl::event_stream<> _lockChanges;
 	base::Timer _autolockTimer;
 	rpl::lifetime _lifetime;

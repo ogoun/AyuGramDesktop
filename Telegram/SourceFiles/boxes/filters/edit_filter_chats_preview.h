@@ -34,6 +34,10 @@ public:
 		Flags flags,
 		const base::flat_set<not_null<History*>> &peers);
 
+	// AyuGram: chats not to show (chats of locked protected folders), the
+	// folder data itself keeps them.
+	void setHiddenCheck(Fn<bool(not_null<History*>)> hidden);
+
 	int resizeGetHeight(int newWidth) override;
 
 private:
@@ -60,5 +64,6 @@ private:
 
 	rpl::event_stream<Flag> _flagRemoved;
 	rpl::event_stream<not_null<History*>> _peerRemoved;
+	Fn<bool(not_null<History*>)> _hidden;
 
 };

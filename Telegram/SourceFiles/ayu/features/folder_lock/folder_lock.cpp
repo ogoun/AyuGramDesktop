@@ -71,6 +71,7 @@ FolderLock::FolderLock(not_null<Main::Session*> session)
 	// No notify here: FolderLock is created lazily, possibly from inside
 	// Session::refreshChatListEntry(), and a full refresh would re-enter it.
 	refreshProtected(false);
+	_rules = collectRules();
 
 	AyuSettings::getInstance().folderProtectionChanges(
 	) | rpl::on_next([=] {
@@ -93,9 +94,23 @@ uint64 FolderLock::userId() const {
 }
 
 void FolderLock::refreshProtected(bool notify) {
-	const auto &settings = AyuSettings::getInstance();
+	auto &settings = AyuSettings::getInstance();
+	const auto &filters = _session->data().chatsFilters();
+	const auto records = settings.folderProtectionIds(userId());
+	const auto wasAwaiting = _awaitingRules;
+	_awaitingRules = !records.empty() && !filters.loaded();
+	if (notify && !_awaitingRules && filters.loaded()) {
+		// Records of folders removed while offline: a new folder may get
+		// the same id later.
+		for (const auto id : records) {
+			if (!ranges::contains(filters.list(), id, &Data::ChatFilter::id)) {
+				settings.setFolderProtection(userId(), id, std::nullopt);
+				return; // Re-entered through folderProtectionChanges().
+			}
+		}
+	}
 	auto now = base::flat_set<FilterId>();
-	for (const auto &filter : _session->data().chatsFilters().list()) {
+	for (const auto &filter : filters.list()) {
 		if (filter.id() && settings.folderProtection(userId(), filter.id())) {
 			now.emplace(filter.id());
 		}
@@ -110,7 +125,8 @@ void FolderLock::refreshProtected(bool notify) {
 	const auto added = ranges::any_of(now, [&](FilterId id) {
 		return !_protected.contains(id);
 	});
-	const auto changed = (now != _protected);
+	const auto changed = (now != _protected)
+		|| (wasAwaiting != _awaitingRules);
 	_protected = std::move(now);
 	if (notify && changed) {
 		applyChanged(added);
@@ -126,34 +142,42 @@ bool FolderLock::isLocked(FilterId id) const {
 }
 
 bool FolderLock::anyLocked() const {
+	if (_awaitingRules) {
+		return true;
+	}
 	return ranges::any_of(_protected, [&](FilterId id) {
 		return !_unlocked.contains(id);
 	});
 }
 
 bool FolderLock::isLocked(not_null<History*> history) const {
-	if (!anyLocked()) {
+	if (_awaitingRules) {
+		return true;
+	} else if (!anyLocked()) {
 		return false;
 	}
+	// Hidden if it matches a locked protected folder and no unlocked one:
+	// a folder unlocked by the user shows all of its chats.
 	const auto &list = _session->data().chatsFilters().list();
+	auto locked = false;
 	for (const auto id : _protected) {
-		if (_unlocked.contains(id)) {
-			continue;
-		}
 		const auto i = ranges::find(list, id, &Data::ChatFilter::id);
-		if (i != end(list) && i->matchesRules(history)) {
-			return true;
+		if (i == end(list) || !i->matchesRules(history)) {
+			continue;
+		} else if (_unlocked.contains(id)) {
+			return false;
 		}
+		locked = true;
 	}
-	return false;
+	return locked;
 }
 
 bool FolderLock::isLocked(not_null<PeerData*> peer) const {
 	if (!anyLocked()) {
 		return false;
 	}
-	const auto history = peer->owner().historyLoaded(peer);
-	return history && isLocked(not_null(history));
+	// A not yet loaded chat still matches by its type.
+	return isLocked(peer->owner().history(peer));
 }
 
 bool FolderLock::isLockedForList(
@@ -235,7 +259,11 @@ void FolderLock::check(
 				done({ .error = UnlockError::Failed }, -1);
 				return;
 			}
-			if (result.ok) {
+			if (result.failed && !result.ok) {
+				// A broken record, not a wrong PIN: no retry penalty.
+				done({ .error = UnlockError::Failed }, -1);
+				return;
+			} else if (result.ok) {
 				if (record->badTries) {
 					record->badTries = 0;
 					record->lastBadTry = 0;
@@ -353,9 +381,31 @@ void FolderLock::lockAll() {
 	}
 }
 
+auto FolderLock::collectRules() const -> base::flat_map<FilterId, Rules> {
+	auto result = base::flat_map<FilterId, Rules>();
+	for (const auto &filter : _session->data().chatsFilters().list()) {
+		if (isProtected(filter.id())) {
+			using Flag = Data::ChatFilter::Flag;
+			result.emplace(filter.id(), Rules{
+				.flags = (filter.flags() & Flag::RulesMask),
+				.always = filter.always(),
+				.never = filter.never(),
+			});
+		}
+	}
+	return result;
+}
+
 void FolderLock::rulesChanged() {
+	refreshProtected(true);
+	// Pinning, reordering or renaming don't change what is hidden, so they
+	// don't lock. Changed rules (maybe from another device) lock everything.
+	auto rules = collectRules();
+	if (rules == _rules) {
+		return;
+	}
+	_rules = std::move(rules);
 	_unlocked.clear();
-	refreshProtected(false);
 	applyChanged(true);
 }
 

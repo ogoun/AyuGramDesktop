@@ -131,6 +131,8 @@ void PinBox(
 
 } // namespace
 
+static void CloseLockedChatsInWindowsNow(not_null<Main::Session*> session);
+
 void ShowUnlockFolderBox(
 		not_null<Window::SessionController*> controller,
 		FilterId id,
@@ -359,6 +361,14 @@ void AddFolderProtectionSection(
 }
 
 void CloseLockedChatsInWindows(not_null<Main::Session*> session) {
+	// Deferred: locking may start inside an event handler of the very window
+	// that gets closed here (minimize, hide, a shortcut).
+	crl::on_main(session, [=] {
+		CloseLockedChatsInWindowsNow(session);
+	});
+}
+
+static void CloseLockedChatsInWindowsNow(not_null<Main::Session*> session) {
 	const auto &lock = session->data().chatsFilters().folderLock();
 	using WindowPointer = base::weak_ptr<Window::SessionController>;
 	auto closing = std::vector<WindowPointer>();

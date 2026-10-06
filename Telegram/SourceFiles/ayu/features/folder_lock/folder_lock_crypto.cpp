@@ -241,28 +241,29 @@ CheckResult CheckPin(
 	auto result = CheckResult();
 	for (auto i = 0; i != int(slots.size()); ++i) {
 		auto key = DeriveKey(pin, salt, i, params);
+		if (key.isEmpty()) {
+			result.failed = true;
+		}
 		auto opened = OpenSlot(key, aad, slots[i]);
 		Wipe(key);
 		if (opened && !result.ok) {
-			result = CheckResult{
-				.ok = true,
-				.slot = i,
-				.content = std::move(*opened),
-			};
+			result.ok = true;
+			result.slot = i;
+			result.content = std::move(*opened);
 		}
 	}
 	return result;
 }
 
 int RetryDelaySeconds(int badTries) {
-	if (badTries <= 3) {
+	if (badTries < 3) {
 		return 0;
 	}
 	switch (badTries) {
-	case 4: return 5;
-	case 5: return 10;
-	case 6: return 20;
-	case 7: return 40;
+	case 3: return 5;
+	case 4: return 10;
+	case 5: return 20;
+	case 6: return 40;
 	}
 	return 60;
 }

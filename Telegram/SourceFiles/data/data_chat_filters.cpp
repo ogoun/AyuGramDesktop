@@ -1043,7 +1043,18 @@ const std::vector<ChatFilter> &ChatFilters::list() const {
 }
 
 FilterId ChatFilters::defaultId() const {
-	return lookupId(0);
+	const auto result = lookupId(0);
+	// AyuGram: a locked protected folder can't be opened by default.
+	const auto &lock = folderLock();
+	if (!lock.isLocked(result)) {
+		return result;
+	}
+	for (const auto &filter : _list) {
+		if (!lock.isLocked(filter.id())) {
+			return filter.id();
+		}
+	}
+	return FilterId();
 }
 
 FilterId ChatFilters::lookupId(int index) const {

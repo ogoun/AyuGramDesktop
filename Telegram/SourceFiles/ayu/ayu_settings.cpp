@@ -427,7 +427,23 @@ void AyuSettings::save() {
 }
 
 void AyuSettings::reset() {
-	getInstance() = AyuSettings();
+	auto &instance = getInstance();
+
+	// AyuGram: a settings reset must not remove folder PINs (that would
+	// reveal hidden chats without the PIN), and live subscribers of these
+	// streams must keep working.
+	auto protection = std::move(instance._folderProtection);
+	auto protectionChanges = std::move(instance._folderProtectionChanges);
+	auto hidden = std::move(instance._foldersHiddenFromAllChats);
+	auto hiddenChanges = std::move(
+		instance._foldersHiddenFromAllChatsChanges);
+
+	instance = AyuSettings();
+
+	instance._folderProtection = std::move(protection);
+	instance._folderProtectionChanges = std::move(protectionChanges);
+	instance._foldersHiddenFromAllChats = std::move(hidden);
+	instance._foldersHiddenFromAllChatsChanges = std::move(hiddenChanges);
 	save();
 }
 
@@ -1115,6 +1131,17 @@ std::optional<FolderProtectionRecord> AyuSettings::folderProtection(
 	return j->second;
 }
 
+std::vector<int> AyuSettings::folderProtectionIds(uint64 userId) const {
+	auto result = std::vector<int>();
+	const auto i = _folderProtection.find(userId);
+	if (i != _folderProtection.end()) {
+		for (const auto &[filterId, record] : i->second) {
+			result.push_back(filterId);
+		}
+	}
+	return result;
+}
+
 void AyuSettings::setFolderProtection(
 		uint64 userId,
 		int filterId,
@@ -1384,38 +1411,59 @@ void from_json(const nlohmann::json &j, AyuSettings &s) {
 					QByteArray::fromStdString(value.get<std::string>()))
 				: QByteArray();
 		};
+		const auto number = [](
+				const nlohmann::json &object,
+				const char *key,
+				auto fallback) {
+			const auto i = object.find(key);
+			return (i != object.end() && i->is_number_integer())
+				? i->get<decltype(fallback)>()
+				: fallback;
+		};
 		for (auto &[userKey, folders] : j["folderProtection"].items()) {
+			auto userId = uint64();
+			try {
+				userId = std::stoull(userKey);
+			} catch (...) {
+				continue;
+			}
 			if (!folders.is_object()) {
 				continue;
 			}
 			for (auto &[filterKey, value] : folders.items()) {
-				if (!value.is_object()) {
+				auto filterId = 0;
+				try {
+					filterId = std::stoi(filterKey);
+				} catch (...) {
 					continue;
 				}
-				// A damaged record is kept: the folder stays locked.
+				// A damaged record is kept as is (empty / wrong slots):
+				// the folder then stays protected and can't be opened.
 				auto r = FolderProtectionRecord();
-				r.autolockMinutes = value.value("autolockMinutes", 15);
-				r.salt = bytes(value.value("salt", nlohmann::json()));
-				const auto kdf = value.value(
-					"kdf",
-					nlohmann::json::object());
-				if (kdf.is_object()) {
-					r.kdfN = kdf.value("N", uint64(0));
-					r.kdfR = kdf.value("r", uint64(0));
-					r.kdfP = kdf.value("p", uint64(0));
+				if (value.is_object()) {
+					r.autolockMinutes = number(value, "autolockMinutes", 15);
+					r.salt = bytes(value.value("salt", nlohmann::json()));
+					const auto kdf = value.value(
+						"kdf",
+						nlohmann::json::object());
+					if (kdf.is_object()) {
+						r.kdfN = number(kdf, "N", uint64(0));
+						r.kdfR = number(kdf, "r", uint64(0));
+						r.kdfP = number(kdf, "p", uint64(0));
+					}
+					const auto slots = value.value(
+						"slots",
+						nlohmann::json::array());
+					for (auto i = 0; i != 2; ++i) {
+						r.slots[i] = (slots.is_array()
+							&& slots.size() > size_t(i))
+							? bytes(slots[i])
+							: QByteArray();
+					}
+					r.badTries = number(value, "badTries", 0);
+					r.lastBadTry = number(value, "lastBadTry", int64(0));
 				}
-				const auto slots = value.value(
-					"slots",
-					nlohmann::json::array());
-				for (auto i = 0; i != 2; ++i) {
-					r.slots[i] = (slots.is_array() && slots.size() > size_t(i))
-						? bytes(slots[i])
-						: QByteArray();
-				}
-				r.badTries = value.value("badTries", 0);
-				r.lastBadTry = value.value("lastBadTry", int64(0));
-				s._folderProtection[std::stoull(userKey)][std::stoi(filterKey)]
-					= std::move(r);
+				s._folderProtection[userId][filterId] = std::move(r);
 			}
 		}
 	}

@@ -91,12 +91,17 @@ not_null<FilterChatsPreview*> SetupChatsPreview(
 		not_null<rpl::variable<Data::ChatFilter>*> data,
 		Fn<void(const Data::ChatFilter&)> updateDefaultTitle,
 		Flags flags,
-		ExceptionPeersGetter peers) {
+		ExceptionPeersGetter peers,
+		Fn<bool(not_null<History*>)> hidden = nullptr) {
 	const auto rules = data->current();
 	const auto preview = content->add(object_ptr<FilterChatsPreview>(
 		content,
 		rules.flags() & flags,
 		(rules.*peers)()));
+	if (hidden) { // AyuGram
+		preview->setHiddenCheck(std::move(hidden));
+		preview->updateData(rules.flags() & flags, (rules.*peers)());
+	}
 
 	preview->flagRemoved(
 	) | rpl::on_next([=](Flag flag) {
@@ -790,12 +795,20 @@ void EditFilterBox(
 		st::settingsButtonActive,
 		{ &st::settingsIconAdd, IconType::Round, &st::windowBgActive });
 
+	// AyuGram: names of locked chats don't show in other folders' settings.
+	const auto ayuLock = &session->data().chatsFilters().folderLock();
+	const auto ayuHidden = ayuLock->isProtected(filter.id())
+		? Fn<bool(not_null<History*>)>()
+		: Fn<bool(not_null<History*>)>([=](not_null<History*> history) {
+			return ayuLock->isLocked(history);
+		});
 	const auto include = SetupChatsPreview(
 		content,
 		data,
 		updateDefaultTitle,
 		kTypes,
-		&Data::ChatFilter::always);
+		&Data::ChatFilter::always,
+		ayuHidden);
 
 	Ui::AddSkip(content);
 	Ui::AddDividerText(content, tr::lng_filters_include_about());
@@ -822,7 +835,8 @@ void EditFilterBox(
 		data,
 		updateDefaultTitle,
 		kExcludeTypes,
-		&Data::ChatFilter::never);
+		&Data::ChatFilter::never,
+		ayuHidden);
 
 	Ui::AddSkip(excludeInner);
 	Ui::AddDividerText(excludeInner, tr::lng_filters_exclude_about());

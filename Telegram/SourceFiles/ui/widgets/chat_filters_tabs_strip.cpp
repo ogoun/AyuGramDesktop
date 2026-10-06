@@ -40,6 +40,11 @@ https://github.com/telegramdesktop/tdesktop/blob/master/LEGAL
 #include "styles/style_media_player.h" // mediaPlayerMenuCheck
 #include "styles/style_menu_icons.h"
 
+// AyuGram includes
+#include "ayu/features/folder_lock/folder_lock.h"
+#include "data/data_chat_filters.h"
+#include "dialogs/dialogs_common.h"
+
 #include <QScrollBar>
 
 // AyuGram includes
@@ -90,11 +95,14 @@ void ShowMenu(
 			[=] { EditExistingFilter(controller, id); },
 			&st::menuIconEdit);
 
-		MarkAsReadMenu::AddChatListAction(
-			controller,
-			MarkAsReadMenu::ChatListKind::Folder,
-			[=] { return session->data().chatsFilters().chatsList(id); },
-			addAction);
+		// AyuGram: nothing about a locked folder's chats, no read receipts.
+		if (!session->data().chatsFilters().folderLock().isLocked(id)) {
+			MarkAsReadMenu::AddChatListAction(
+				controller,
+				MarkAsReadMenu::ChatListKind::Folder,
+				[=] { return session->data().chatsFilters().chatsList(id); },
+				addAction);
+		}
 
 		auto showRemoveBox = [=] {
 			state->removeApi.request(base::make_weak(parent), controller, id);
@@ -109,7 +117,13 @@ void ShowMenu(
 		MarkAsReadMenu::AddChatListAction(
 			controller,
 			MarkAsReadMenu::ChatListKind::AllChats,
-			[=] { return session->data().chatsList(); },
+			[=] {
+				// AyuGram: skip chats of locked protected folders.
+				auto &filters = session->data().chatsFilters();
+				return filters.folderLock().anyLocked()
+					? filters.chatsList(Dialogs::kAyuAllChatsVisibleFilterId)
+					: session->data().chatsList();
+			},
 			addAction);
 
 		auto openFiltersSettings = [=] {

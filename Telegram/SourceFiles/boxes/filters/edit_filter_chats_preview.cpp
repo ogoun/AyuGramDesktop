@@ -69,12 +69,20 @@ void FilterChatsPreview::updateData(
 		}
 	}
 	for (const auto &history : peers) {
+		if (_hidden && _hidden(history)) {
+			continue; // AyuGram
+		}
 		_removePeer.push_back(PeerButton{
 			.history = history,
 			.button = makeButton([=] { removePeer(history); })
 		});
 	}
 	refresh();
+}
+
+void FilterChatsPreview::setHiddenCheck(
+		Fn<bool(not_null<History*>)> hidden) {
+	_hidden = std::move(hidden);
 }
 
 int FilterChatsPreview::resizeGetHeight(int newWidth) {

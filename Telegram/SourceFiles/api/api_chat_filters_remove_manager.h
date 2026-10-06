@@ -27,6 +27,11 @@ public:
 		FilterId id);
 
 private:
+	void requestVerified(
+		base::weak_qptr<Ui::RpWidget> widget,
+		base::weak_ptr<Window::SessionController> weak,
+		FilterId id);
+
 	FilterId _removingId = 0;
 	mtpRequestId _removingRequestId = 0;
 

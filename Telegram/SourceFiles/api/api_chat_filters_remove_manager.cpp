@@ -20,6 +20,11 @@ https://github.com/telegramdesktop/tdesktop/blob/master/LEGAL
 #include "window/window_session_controller.h"
 #include "styles/style_layers.h"
 
+// AyuGram includes
+#include "ayu/features/folder_lock/folder_lock.h"
+#include "ayu/features/folder_lock/folder_lock_ui.h"
+#include "data/data_chat_filters.h"
+
 namespace Api {
 namespace {
 
@@ -60,6 +65,26 @@ void RemoveComplexChatFilter::request(
 		base::weak_qptr<Ui::RpWidget> widget,
 		base::weak_ptr<Window::SessionController> weak,
 		FilterId id) {
+	// AyuGram: removing a protected folder would reveal its chats.
+	const auto strong = weak.get();
+	if (strong
+		&& strong->session().data().chatsFilters().folderLock().isProtected(
+			id)) {
+		Ayu::ShowVerifyFolderPinBox(strong, id, crl::guard(widget, [=, this] {
+			requestVerified(widget, weak, id);
+		}));
+		return;
+	}
+	requestVerified(widget, weak, id);
+}
+
+void RemoveComplexChatFilter::requestVerified(
+		base::weak_qptr<Ui::RpWidget> widget,
+		base::weak_ptr<Window::SessionController> weak,
+		FilterId id) {
+	if (!weak) {
+		return;
+	}
 	const auto session = &weak->session();
 	const auto &list = session->data().chatsFilters().list();
 	const auto i = ranges::find(list, id, &Data::ChatFilter::id);

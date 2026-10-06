@@ -52,6 +52,8 @@ https://github.com/telegramdesktop/tdesktop/blob/master/LEGAL
 
 // AyuGram includes
 #include "ayu/ayu_settings.h"
+#include "ayu/features/folder_lock/folder_lock.h"
+#include "dialogs/dialogs_common.h"
 
 
 namespace Window {
@@ -791,11 +793,15 @@ void FiltersMenu::showMenu(QPoint position, FilterId id) {
 		auto filteredChats = [=] {
 			return _session->session().data().chatsFilters().chatsList(id);
 		};
-		MarkAsReadMenu::AddChatListAction(
-			_session,
-			MarkAsReadMenu::ChatListKind::Folder,
-			std::move(filteredChats),
-			addAction);
+		// AyuGram: nothing about a locked folder's chats, no read receipts.
+		if (!_session->session().data().chatsFilters().folderLock()
+				.isLocked(id)) {
+			MarkAsReadMenu::AddChatListAction(
+				_session,
+				MarkAsReadMenu::ChatListKind::Folder,
+				std::move(filteredChats),
+				addAction);
+		}
 
 		addAction({
 			.text = tr::lng_filters_context_remove(tr::now),
@@ -809,7 +815,14 @@ void FiltersMenu::showMenu(QPoint position, FilterId id) {
 		MarkAsReadMenu::AddChatListAction(
 			_session,
 			MarkAsReadMenu::ChatListKind::AllChats,
-			[=] { return _session->session().data().chatsList(); },
+			[=] {
+				// AyuGram: skip chats of locked protected folders.
+				auto &data = _session->session().data();
+				return data.chatsFilters().folderLock().anyLocked()
+					? data.chatsFilters().chatsList(
+						Dialogs::kAyuAllChatsVisibleFilterId)
+					: data.chatsList();
+			},
 			addAction);
 
 		addAction(

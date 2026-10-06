@@ -6479,7 +6479,16 @@ void InnerWidget::setupShortcuts() {
 			ranges::views::ints(0, ranges::unreachable));
 		for (const auto &[command, index] : pinned) {
 			request->check(command) && request->handle([=, index = index] {
-				const auto list = _shownList.get(); // AyuGram
+				// AyuGram: the virtual "All chats" list skips locked chats.
+				const auto &filters = session().data().chatsFilters();
+				const auto list = (_filterId
+					? session().data().chatsFilters().chatsList(_filterId)
+					: (filters.folderLock().anyLocked()
+						|| filters.ayuHidesFromAllChats())
+					? session().data().chatsFilters().chatsList(
+						kAyuAllChatsVisibleFilterId)
+					: session().data().chatsList()
+				)->indexed();
 				const auto count = Dialogs::PinnedDialogsCount(
 					_filterId,
 					list);

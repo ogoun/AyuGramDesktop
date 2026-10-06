@@ -42,6 +42,7 @@ struct SlotContent {
 
 struct CheckResult {
 	bool ok = false;
+	bool failed = false; // Key derivation failed (broken record), not a PIN.
 	int slot = -1;
 	SlotContent content;
 };
@@ -68,7 +69,10 @@ struct CheckResult {
 	const KdfParams &params,
 	int filterId,
 	const std::array<QByteArray, 2> &slots);
+// Seconds to wait after `badTries` wrong PINs in a row.
 [[nodiscard]] int RetryDelaySeconds(int badTries);
+// Best effort: zeroes the buffer if `data` is its only owner (other
+// QByteArray copies sharing it, and Qt's own input field text, stay).
 void Wipe(QByteArray &data);
 
 } // namespace Ayu::FolderLockCrypto

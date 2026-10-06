@@ -3330,7 +3330,10 @@ void SessionController::setActiveChatsFilter(
 	// locks it again.
 	auto &lock = session().data().chatsFilters().folderLock();
 	if (lock.isLocked(id)) {
-		_activeChatsFilter.force_assign(activeChatsFilterCurrent());
+		const auto current = activeChatsFilterCurrent();
+		_activeChatsFilter.force_assign(lock.isLocked(current)
+			? FilterId()
+			: current);
 		Ayu::ShowUnlockFolderBox(this, id, crl::guard(this, [=] {
 			setActiveChatsFilter(id, params);
 		}));

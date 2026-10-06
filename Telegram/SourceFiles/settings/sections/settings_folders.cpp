@@ -473,6 +473,16 @@ not_null<Ui::VerticalLayout*> SetupFoldersList(
 			object_ptr<FilterRowButton>(wrap, session, filter));
 		button->removeRequests(
 		) | rpl::on_next([=] {
+			// AyuGram: removing a protected folder would reveal its chats.
+			const auto id = find(button)->filter.id();
+			if (controller->session().data().chatsFilters().folderLock()
+					.isProtected(id)) {
+				Ayu::ShowVerifyFolderPinBox(
+					controller,
+					id,
+					crl::guard(button, [=] { remove(button); }));
+				return;
+			}
 			remove(button);
 		}, button->lifetime());
 		button->restoreRequests(
@@ -823,9 +833,22 @@ void SetupRecommendedSection(
 			object_ptr<FilterRowButton>(filtersWrap, session, filter));
 		button->removeRequests(
 		) | rpl::on_next([=] {
-			const auto row = find(button);
-			row->removed = true;
-			button->setRemoved(true);
+			const auto doRemove = [=] {
+				const auto row = find(button);
+				row->removed = true;
+				button->setRemoved(true);
+			};
+			// AyuGram: removing a protected folder would reveal its chats.
+			const auto id = find(button)->filter.id();
+			if (controller->session().data().chatsFilters().folderLock()
+					.isProtected(id)) {
+				Ayu::ShowVerifyFolderPinBox(
+					controller,
+					id,
+					crl::guard(button, doRemove));
+				return;
+			}
+			doRemove();
 		}, button->lifetime());
 		button->restoreRequests(
 		) | rpl::on_next([=] {
