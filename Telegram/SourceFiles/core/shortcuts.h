@@ -66,6 +66,7 @@ enum class Command {
 
 	ShowArchive,
 	ShowContacts,
+	AyuLockFolders, // AyuGram
 
 	JustSendMessage,
 	SendSilentMessage,

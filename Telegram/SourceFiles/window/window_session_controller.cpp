@@ -131,6 +131,9 @@ https://github.com/telegramdesktop/tdesktop/blob/master/LEGAL
 #include "styles/style_layers.h" // st::boxLabel
 
 // AyuGram includes
+#include "ayu/features/folder_lock/folder_lock.h"
+#include "ayu/features/folder_lock/folder_lock_ui.h"
+#include "data/data_chat_filters.h"
 #include "ayu/ayu_settings.h"
 
 
@@ -625,6 +628,9 @@ void SessionNavigation::showMessageByLinkResolved(
 void SessionNavigation::showPeerByLinkResolved(
 		not_null<PeerData*> peer,
 		const PeerByLinkInfo &info) {
+	if (peer->owner().chatsFilters().folderLock().isLocked(peer)) {
+		return; // AyuGram: a chat of a locked protected folder.
+	}
 	auto params = SectionShow{
 		SectionShow::Way::Forward
 	};
@@ -3319,6 +3325,20 @@ void SessionController::setActiveChatsFilter(
 		const SectionShow &params) {
 	if (!isPrimary()) {
 		return;
+	}
+	// AyuGram: a protected folder opens only after its PIN, leaving it
+	// locks it again.
+	auto &lock = session().data().chatsFilters().folderLock();
+	if (lock.isLocked(id)) {
+		_activeChatsFilter.force_assign(activeChatsFilterCurrent());
+		Ayu::ShowUnlockFolderBox(this, id, crl::guard(this, [=] {
+			setActiveChatsFilter(id, params);
+		}));
+		return;
+	}
+	if (const auto was = activeChatsFilterCurrent()
+		; was != id && lock.isProtected(was)) {
+		lock.lock(was);
 	}
 	const auto changed = (activeChatsFilterCurrent() != id);
 	if (changed) {

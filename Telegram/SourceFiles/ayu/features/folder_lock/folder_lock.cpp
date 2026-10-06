@@ -8,8 +8,12 @@
 
 #include "ayu/ayu_settings.h"
 #include "ayu/features/folder_lock/folder_lock_crypto.h"
+#include "ayu/features/folder_lock/folder_lock_ui.h"
 #include "base/unixtime.h"
 #include "core/application.h"
+#include "core/shortcuts.h"
+#include "main/main_account.h"
+#include "main/main_domain.h"
 #include "data/data_chat_filters.h"
 #include "data/data_folder.h"
 #include "data/data_peer.h"
@@ -29,6 +33,27 @@ namespace {
 using namespace FolderLockCrypto;
 
 constexpr auto kAutolockCheckPeriod = 15 * crl::time(1000);
+
+// Ctrl+Shift+L locks protected folders of all accounts.
+void SetupLockShortcutOnce() {
+	static auto lifetime = rpl::lifetime();
+	if (lifetime) {
+		return;
+	}
+	Shortcuts::Requests(
+	) | rpl::on_next([](not_null<Shortcuts::Request*> request) {
+		using Command = Shortcuts::Command;
+		request->check(Command::AyuLockFolders) && request->handle([] {
+			for (const auto &[index, account]
+					: Core::App().domain().accounts()) {
+				if (const auto session = account->maybeSession()) {
+					session->data().chatsFilters().folderLock().lockAll();
+				}
+			}
+			return true;
+		});
+	}, lifetime);
+}
 
 [[nodiscard]] KdfParams ParamsOf(const FolderProtectionRecord &record) {
 	return KdfParams{
@@ -58,6 +83,7 @@ FolderLock::FolderLock(not_null<Main::Session*> session)
 	}, _lifetime);
 
 	_autolockTimer.callEach(kAutolockCheckPeriod);
+	SetupLockShortcutOnce();
 }
 
 FolderLock::~FolderLock() = default;
@@ -378,6 +404,7 @@ void FolderLock::cleanupLocked() {
 			Data::Folder::kId)) {
 		clear(folder->chatsList());
 	}
+	CloseLockedChatsInWindows(_session);
 }
 
 } // namespace Ayu

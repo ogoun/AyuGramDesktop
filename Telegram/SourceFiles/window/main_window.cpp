@@ -61,7 +61,9 @@ https://github.com/telegramdesktop/tdesktop/blob/master/LEGAL
 #include <kurlmimedata.h>
 
 // AyuGram includes
+#include "ayu/features/folder_lock/folder_lock.h"
 #include "ayu/ui/ayu_logo.h"
+#include "data/data_chat_filters.h"
 
 
 namespace Window {
@@ -599,6 +601,11 @@ void MainWindow::handleStateChanged(Qt::WindowState state) {
 		&& (Core::App().settings().workMode() == WorkMode::TrayOnly)) {
 		minimizeToTray();
 	}
+	if (state == Qt::WindowMinimized) {
+		if (const auto controller = sessionController()) { // AyuGram
+			controller->session().data().chatsFilters().folderLock().lockAll();
+		}
+	}
 	savePosition(state);
 }
 
@@ -620,6 +627,9 @@ void MainWindow::handleVisibleChanged(bool visible) {
 		}
 	} else {
 		_maximizedBeforeHide = Core::App().settings().windowPosition().maximized;
+		if (const auto controller = sessionController()) { // AyuGram
+			controller->session().data().chatsFilters().folderLock().lockAll();
+		}
 	}
 
 	handleVisibleChangedHook(visible);

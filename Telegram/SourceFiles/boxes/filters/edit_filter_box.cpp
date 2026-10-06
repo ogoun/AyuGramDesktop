@@ -64,6 +64,9 @@ https://github.com/telegramdesktop/tdesktop/blob/master/LEGAL
 
 // AyuGram includes
 #include "ayu/ayu_settings.h"
+#include "ayu/features/folder_lock/folder_lock.h"
+#include "ayu/features/folder_lock/folder_lock_ui.h"
+#include "ui/vertical_list.h"
 #include "ui/widgets/checkbox.h"
 
 namespace {
@@ -616,6 +619,9 @@ void EditFilterBox(
 	// AyuGram: hide chats of this folder from "All chats". A new folder gets
 	// its id only when saved, so the option is shown for existing ones.
 	const auto ayuUserId = session->userId().bare;
+	if (filter.id()) {
+		Ui::AddSubsectionTitle(content, tr::ayu_FolderLockSection());
+	}
 	const auto ayuHideFromAll = filter.id()
 		? content->add(
 			object_ptr<Ui::Checkbox>(
@@ -631,6 +637,13 @@ void EditFilterBox(
 				st::windowFilterNameInputPadding.right(),
 				st::windowFilterNameInputPadding.bottom()))
 		: nullptr;
+	if (ayuHideFromAll) {
+		Ayu::AddFolderProtectionSection(
+			content,
+			window,
+			filter.id(),
+			ayuHideFromAll);
+	}
 
 	const auto nameEditing = box->lifetime().make_state<NameEditing>(
 		NameEditing{ name });
@@ -1167,7 +1180,9 @@ void EditFilterBox(
 	box->addButton(tr::lng_cancel(), [=] { box->closeBox(); });
 }
 
-void EditExistingFilter(
+namespace {
+
+void EditExistingFilterUnlocked(
 		not_null<Window::SessionController*> window,
 		FilterId id) {
 	Expects(id != 0);
@@ -1204,4 +1219,22 @@ void EditExistingFilter(
 		*i,
 		crl::guard(session, doneCallback),
 		crl::guard(session, saveAnd)));
+}
+
+} // namespace
+
+void EditExistingFilter(
+		not_null<Window::SessionController*> window,
+		FilterId id) {
+	Expects(id != 0);
+
+	// AyuGram: settings of a protected folder only after its PIN.
+	const auto session = &window->session();
+	if (session->data().chatsFilters().folderLock().isProtected(id)) {
+		Ayu::ShowVerifyFolderPinBox(window, id, crl::guard(window, [=] {
+			EditExistingFilterUnlocked(window, id);
+		}));
+		return;
+	}
+	EditExistingFilterUnlocked(window, id);
 }

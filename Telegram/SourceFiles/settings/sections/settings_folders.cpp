@@ -52,6 +52,10 @@ https://github.com/telegramdesktop/tdesktop/blob/master/LEGAL
 #include "styles/style_settings.h"
 #include "styles/style_stickers_box.h"
 
+// AyuGram includes
+#include "ayu/features/folder_lock/folder_lock.h"
+#include "ayu/features/folder_lock/folder_lock_ui.h"
+
 namespace Settings {
 namespace {
 
@@ -494,12 +498,24 @@ not_null<Ui::VerticalLayout*> SetupFoldersList(
 				doneCallback(data);
 				state->save(button, next);
 			};
-			controller->window().show(Box(
-				EditFilterBox,
-				controller,
-				found->filter,
-				crl::guard(button, doneCallback),
-				crl::guard(button, saveAnd)));
+			const auto open = [=] {
+				controller->window().show(Box(
+					EditFilterBox,
+					controller,
+					find(button)->filter,
+					crl::guard(button, doneCallback),
+					crl::guard(button, saveAnd)));
+			};
+			const auto id = found->filter.id();
+			if (controller->session().data().chatsFilters().folderLock()
+					.isProtected(id)) { // AyuGram: settings only after PIN.
+				Ayu::ShowVerifyFolderPinBox(
+					controller,
+					id,
+					crl::guard(button, open));
+			} else {
+				open();
+			}
 		});
 		state->rows.push_back({ button, filter });
 		state->count = state->rows.size();
@@ -834,12 +850,24 @@ void SetupRecommendedSection(
 				doneCallback(data);
 				state->save(button, next);
 			};
-			controller->window().show(Box(
-				EditFilterBox,
-				controller,
-				found->filter,
-				crl::guard(button, doneCallback),
-				crl::guard(button, saveAnd)));
+			const auto open = [=] {
+				controller->window().show(Box(
+					EditFilterBox,
+					controller,
+					find(button)->filter,
+					crl::guard(button, doneCallback),
+					crl::guard(button, saveAnd)));
+			};
+			const auto id = found->filter.id();
+			if (controller->session().data().chatsFilters().folderLock()
+					.isProtected(id)) { // AyuGram: settings only after PIN.
+				Ayu::ShowVerifyFolderPinBox(
+					controller,
+					id,
+					crl::guard(button, open));
+			} else {
+				open();
+			}
 		});
 		state->rows.push_back({ button, filter });
 		state->count = state->rows.size();

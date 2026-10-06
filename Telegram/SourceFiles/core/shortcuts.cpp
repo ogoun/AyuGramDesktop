@@ -123,6 +123,7 @@ const auto CommandByName = base::flat_map<QString, Command>{
 
 	{ u"show_archive"_q                  , Command::ShowArchive },
 	{ u"show_contacts"_q                 , Command::ShowContacts },
+	{ u"ayu_lock_folders"_q              , Command::AyuLockFolders },
 
 	{ u"read_chat"_q                     , Command::ReadChat },
 
@@ -534,6 +535,7 @@ void Manager::fillDefaults() {
 
 	set(u"ctrl+9"_q                  , Command::ShowArchive);
 	set(u"ctrl+j"_q                  , Command::ShowContacts);
+	set(u"ctrl+shift+l"_q            , Command::AyuLockFolders); // AyuGram
 
 	set(u"ctrl+r"_q                  , Command::ReadChat);
 

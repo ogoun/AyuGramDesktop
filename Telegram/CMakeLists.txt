@@ -237,6 +237,8 @@ set(ayugram_files
         ayu/features/folder_lock/folder_lock.h
         ayu/features/folder_lock/folder_lock_crypto.cpp
         ayu/features/folder_lock/folder_lock_crypto.h
+        ayu/features/folder_lock/folder_lock_ui.cpp
+        ayu/features/folder_lock/folder_lock_ui.h
         ayu/features/forward/ayu_sync.cpp
         ayu/features/forward/ayu_sync.h
         ayu/features/translator/ayu_translator.cpp
