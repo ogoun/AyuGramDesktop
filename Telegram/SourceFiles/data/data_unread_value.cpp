@@ -15,6 +15,13 @@ https://github.com/telegramdesktop/tdesktop/blob/master/LEGAL
 #include "main/main_session.h"
 #include "window/notifications_manager.h"
 
+// AyuGram includes
+#include "ayu/features/folder_lock/folder_lock.h"
+#include "dialogs/dialogs_indexed_list.h"
+#include "dialogs/dialogs_main_list.h"
+#include "dialogs/dialogs_row.h"
+#include "history/history.h"
+
 namespace Data {
 namespace {
 
@@ -25,6 +32,24 @@ rpl::producer<Dialogs::UnreadState> MainListUnreadState(
 	) | rpl::map([=] {
 		return list->unreadState();
 	});
+}
+
+// AyuGram: unread of locked chats outside of the archive.
+[[nodiscard]] Dialogs::UnreadState AyuLockedMainUnreadState(
+		not_null<Main::Session*> session) {
+	auto result = Dialogs::UnreadState();
+	const auto &lock = session->data().chatsFilters().folderLock();
+	if (!lock.anyLocked()) {
+		return result;
+	}
+	for (const auto &row : session->data().chatsList()->indexed()->all()) {
+		if (const auto history = row->history()) {
+			if (lock.isLocked(not_null(history))) {
+				result += history->chatListUnreadState();
+			}
+		}
+	}
+	return result;
 }
 
 } // namespace
@@ -42,14 +67,24 @@ rpl::producer<Dialogs::UnreadState> MainListUnreadState(
 rpl::producer<Dialogs::UnreadState> UnreadStateValue(
 		not_null<Main::Session*> session,
 		FilterId filterId) {
+	// AyuGram: recount when a protected folder is locked or unlocked.
+	const auto lock = &session->data().chatsFilters().folderLock();
+	auto changes = rpl::single(rpl::empty) | rpl::then(lock->lockChanges());
 	if (filterId > 0) {
 		const auto filters = &session->data().chatsFilters();
-		return MainListUnreadState(filters->chatsList(filterId));
+		return rpl::combine(
+			MainListUnreadState(filters->chatsList(filterId)),
+			std::move(changes)
+		) | rpl::map([=](const Dialogs::UnreadState &state, auto) {
+			return lock->isLocked(filterId) ? Dialogs::UnreadState() : state;
+		});
 	}
-	return MainListUnreadState(
-		session->data().chatsList()
-	) | rpl::map([=](const Dialogs::UnreadState &state) {
-		return MainListMapUnreadState(session, state);
+	return rpl::combine(
+		MainListUnreadState(session->data().chatsList()),
+		std::move(changes)
+	) | rpl::map([=](const Dialogs::UnreadState &state, auto) {
+		return MainListMapUnreadState(session, state)
+			- AyuLockedMainUnreadState(session);
 	});
 }
 

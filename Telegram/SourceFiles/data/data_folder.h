@@ -82,6 +82,8 @@ public:
 	void ayuRefreshLocked(); // AyuGram
 
 private:
+	[[nodiscard]] Dialogs::UnreadState ayuLockedUnreadState() const;
+
 	void indexNameParts();
 
 	void reorderLastHistories();

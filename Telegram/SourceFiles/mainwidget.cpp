@@ -104,6 +104,8 @@ https://github.com/telegramdesktop/tdesktop/blob/master/LEGAL
 #include <QtCore/QMimeData>
 
 // AyuGram includes
+#include "ayu/features/folder_lock/folder_lock.h"
+#include "data/data_chat_filters.h"
 #include "ayu/features/forward/ayu_forward.h"
 
 
@@ -1445,6 +1447,11 @@ void MainWidget::showHistory(
 			_controller->window().activate();
 		}
 		return;
+	} else if (const auto locked = session().data().peerLoaded(peerId)
+		; locked
+			&& session().data().chatsFilters().folderLock().isLocked(
+				not_null(locked))) {
+		return; // AyuGram: a chat of a locked protected folder.
 	} else if (auto peer = session().data().peerLoaded(peerId)) {
 		if (peer->migrateTo()) {
 			peer = peer->migrateTo();

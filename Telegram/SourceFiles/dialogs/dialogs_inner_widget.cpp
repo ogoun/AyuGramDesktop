@@ -103,6 +103,7 @@ https://github.com/telegramdesktop/tdesktop/blob/master/LEGAL
 #include <unordered_map>
 
 // AyuGram includes
+#include "ayu/features/folder_lock/folder_lock.h"
 #include "ayu/ui/ayu_userpic.h"
 #include "ayu/utils/telegram_helpers.h"
 #include "styles/style_ayu_icons.h"
@@ -596,6 +597,10 @@ InnerWidget::InnerWidget(
 
 	// AyuGram: "All chats" without chats of the hidden folders.
 	session().data().chatsFilters().ayuAllChatsVisibilityChanges(
+	) | rpl::on_next([=] {
+		ayuApplyAllChatsVisibility();
+	}, lifetime());
+	session().data().chatsFilters().folderLock().lockChanges(
 	) | rpl::on_next([=] {
 		ayuApplyAllChatsVisibility();
 	}, lifetime());
@@ -2806,7 +2811,7 @@ void InnerWidget::startReorderPinned(QPoint localPosition) {
 
 	cancelChatPreview();
 	// AyuGram: pinned order is index based, the virtual list may skip chats.
-	if (_ayuAllChatsVisibleShown || updateReorderIndexGetCount() < 2) {
+	if (_ayuShownVirtualId || updateReorderIndexGetCount() < 2) {
 		_dragging = nullptr;
 	} else {
 		const auto &order = pinnedChatsOrder();
@@ -3418,8 +3423,8 @@ void InnerWidget::handleChatListEntryRefreshes() {
 	using Event = Data::Session::ChatListEntryRefresh;
 	session().data().chatListEntryRefreshes(
 	) | rpl::filter([=](const Event &event) {
-		const auto shownFilterId = _ayuAllChatsVisibleShown // AyuGram
-			? kAyuAllChatsVisibleFilterId
+		const auto shownFilterId = _ayuShownVirtualId // AyuGram
+			? _ayuShownVirtualId
 			: _filterId;
 		if (event.filterId != shownFilterId) {
 			return false;
@@ -3910,18 +3915,18 @@ void InnerWidget::updateSelectedRow(Key key) {
 }
 
 void InnerWidget::refreshShownList() {
-	_ayuAllChatsVisibleShown = ayuAllChatsVisibleWanted();
+	_ayuShownVirtualId = ayuWantedVirtualId();
 	const auto list = _savedSublists
 		? _savedSublists->chatsList()->indexed()
 		: _openedForum
 		? _openedForum->topicsList()->indexed()
 		: _openedCommunity
 		? _openedCommunity->chatsList()->indexed()
+		: _ayuShownVirtualId
+		? session().data().chatsFilters().chatsList(
+			_ayuShownVirtualId)->indexed()
 		: _filterId
 		? session().data().chatsFilters().chatsList(_filterId)->indexed()
-		: _ayuAllChatsVisibleShown
-		? session().data().chatsFilters().chatsList(
-			kAyuAllChatsVisibleFilterId)->indexed()
 		: session().data().chatsList(_openedFolder)->indexed();
 	if (_shownList != list) {
 		_shownList->unfreeze();
@@ -3932,18 +3937,24 @@ void InnerWidget::refreshShownList() {
 }
 
 // AyuGram: "All chats" shows a virtual list without chats of the folders
-// marked "Don't show chats in All Chats".
-bool InnerWidget::ayuAllChatsVisibleWanted() const {
-	return !_savedSublists
-		&& !_openedForum
-		&& !_openedCommunity
-		&& !_filterId
-		&& !_openedFolder
-		&& session().data().chatsFilters().ayuHidesFromAllChats();
+// marked "Don't show chats in All Chats" and of locked protected folders,
+// the Archive shows a virtual list without chats of locked folders.
+FilterId InnerWidget::ayuWantedVirtualId() const {
+	if (_savedSublists || _openedForum || _openedCommunity || _filterId) {
+		return 0;
+	}
+	const auto &filters = session().data().chatsFilters();
+	const auto locked = filters.folderLock().anyLocked();
+	if (_openedFolder) {
+		return locked ? kAyuArchiveVisibleFilterId : 0;
+	}
+	return (locked || filters.ayuHidesFromAllChats())
+		? kAyuAllChatsVisibleFilterId
+		: 0;
 }
 
 void InnerWidget::ayuApplyAllChatsVisibility() {
-	if (ayuAllChatsVisibleWanted() == _ayuAllChatsVisibleShown) {
+	if (ayuWantedVirtualId() == _ayuShownVirtualId) {
 		return;
 	}
 	clearSelection();
@@ -4457,8 +4468,15 @@ void InnerWidget::refreshFilterResults() {
 		? QStringList(_filter)
 		: TextUtilities::PrepareSearchWords(_filter);
 	_filterResults.clear();
+	const auto &lock = session().data().chatsFilters().folderLock();
 	const auto append = [&](not_null<IndexedList*> list) {
-		const auto results = list->filtered(words);
+		auto results = list->filtered(words);
+		if (lock.anyLocked()) { // AyuGram
+			results.erase(ranges::remove_if(results, [&](not_null<Row*> row) {
+				const auto history = row->key().owningHistory();
+				return history && lock.isLocked(not_null(history));
+			}), end(results));
+		}
 		auto top = filteredHeight();
 		auto i = _filterResults.insert(
 			end(_filterResults),
@@ -4486,6 +4504,10 @@ void InnerWidget::refreshFilterResults() {
 		}
 	}
 	for (const auto &[key, row] : _filterResultsGlobal) {
+		if (const auto history = key.owningHistory()
+			; history && lock.isLocked(not_null(history))) {
+			continue; // AyuGram
+		}
 		if (!ranges::contains(_filterResults, key, &FilterResult::key)) {
 			const auto height = filteredHeight();
 			_filterResults.emplace_back(row.get());
@@ -4839,7 +4861,9 @@ void InnerWidget::searchReceived(
 		: (!_openedForum || _searchState.inChat.topic())
 		? _searchState.inChat
 		: Key(_openedForum->history());
+	const auto &lock = session().data().chatsFilters().folderLock();
 	if (inject
+		&& !lock.isLocked(inject->history()) // AyuGram
 		&& (globalSearch
 			|| !_searchState.inChat
 			|| inject->history() == _searchState.inChat.history())) {
@@ -4857,6 +4881,9 @@ void InnerWidget::searchReceived(
 	auto &results = toPreview ? _previewResults : _searchResults;
 	for (const auto &item : messages) {
 		const auto history = item->history();
+		if (lock.isLocked(history)) {
+			continue; // AyuGram
+		}
 		if (toPreview || !uniquePeers || !hasHistoryInResults(history)) {
 			const auto index = int(results.size());
 			const auto repaint = toPreview
@@ -4892,7 +4919,11 @@ void InnerWidget::peerSearchReceived(Api::PeerSearchResult result) {
 	clearPeerSearchResults();
 	_peerSearchResults.reserve(result.peers.size()
 		+ result.sponsored.size());
+	const auto &lock = session().data().chatsFilters().folderLock();
 	for	(const auto &peer : result.my) {
+		if (lock.isLocked(peer)) {
+			continue; // AyuGram
+		}
 		appendToFiltered(peer->owner().history(peer));
 	}
 	const auto inlist = [&](not_null<PeerData*> peer) {
@@ -4905,7 +4936,9 @@ void InnerWidget::peerSearchReceived(Api::PeerSearchResult result) {
 	auto added = base::flat_set<not_null<PeerData*>>();
 	for (const auto &sponsored : result.sponsored) {
 		const auto peer = sponsored.peer;
-		if (inlist(peer) || _sponsoredRemoved.contains(peer)) {
+		if (inlist(peer)
+			|| _sponsoredRemoved.contains(peer)
+			|| lock.isLocked(peer)) { // AyuGram
 			continue;
 		}
 		_peerSearchResults.push_back(
@@ -4917,7 +4950,7 @@ void InnerWidget::peerSearchReceived(Api::PeerSearchResult result) {
 		added.emplace(peer);
 	}
 	for (const auto &peer : result.peers) {
-		if (added.contains(peer) || inlist(peer)) {
+		if (added.contains(peer) || inlist(peer) || lock.isLocked(peer)) {
 			continue;
 		}
 		_peerSearchResults.push_back(
@@ -4941,7 +4974,11 @@ void InnerWidget::idSearchReceived(
 	}
 
 	_idSearchResults.clear();
+	const auto &lock = session().data().chatsFilters().folderLock();
 	for (const auto &peer : results) {
+		if (lock.isLocked(peer)) {
+			continue; // AyuGram
+		}
 		_idSearchResults.push_back(
 			std::make_unique<PeerSearchResult>(peer));
 	}
@@ -6442,10 +6479,7 @@ void InnerWidget::setupShortcuts() {
 			ranges::views::ints(0, ranges::unreachable));
 		for (const auto &[command, index] : pinned) {
 			request->check(command) && request->handle([=, index = index] {
-				const auto list = (_filterId
-					? session().data().chatsFilters().chatsList(_filterId)
-					: session().data().chatsList()
-				)->indexed();
+				const auto list = _shownList.get(); // AyuGram
 				const auto count = Dialogs::PinnedDialogsCount(
 					_filterId,
 					list);

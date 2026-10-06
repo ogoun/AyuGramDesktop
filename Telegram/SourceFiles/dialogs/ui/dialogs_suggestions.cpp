@@ -22,6 +22,7 @@ https://github.com/telegramdesktop/tdesktop/blob/master/LEGAL
 #include "data/data_channel.h"
 #include "data/data_chat.h"
 #include "data/data_chat_filters.h"
+#include "ayu/features/folder_lock/folder_lock.h" // AyuGram
 #include "data/data_download_manager.h"
 #include "data/data_folder.h"
 #include "data/data_peer_values.h"
@@ -835,11 +836,16 @@ RecentsController::RecentsController(
 void RecentsController::prepare() {
 	setupDivider();
 
+	auto count = 0;
 	for (const auto &peer : _recent.list) {
+		if (peer->owner().chatsFilters().folderLock().isLocked(peer)) {
+			continue; // AyuGram
+		}
 		delegate()->peerListAppendRow(std::make_unique<RecentRow>(peer));
+		++count;
 	}
 	delegate()->peerListRefreshRows();
-	setCount(_recent.list.size());
+	setCount(count);
 
 	subscribeToEvents();
 }
@@ -1015,7 +1021,9 @@ void MyChannelsController::prepare() {
 	const auto add = [&](not_null<Dialogs::MainList*> list) {
 		for (const auto &row : list->indexed()->all()) {
 			if (const auto history = row->history()) {
-				if (history->peer->isBroadcast()) {
+				if (history->peer->isBroadcast()
+					&& !owner->chatsFilters().folderLock().isLocked(
+						history)) { // AyuGram
 					_channels.push_back(history);
 				}
 			}
@@ -2806,6 +2814,9 @@ rpl::producer<TopPeersList> TopPeersContent(
 			const auto user = peer->asUser();
 			if (user->isInaccessible()) {
 				continue;
+			} else if (peer->owner().chatsFilters().folderLock().isLocked(
+					peer)) {
+				continue; // AyuGram
 			}
 			const auto self = user && user->isSelf();
 			const auto history = peer->owner().history(peer);

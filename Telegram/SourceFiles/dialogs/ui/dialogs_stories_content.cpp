@@ -15,6 +15,8 @@ https://github.com/telegramdesktop/tdesktop/blob/master/LEGAL
 #include "data/data_photo.h"
 #include "data/data_photo_media.h"
 #include "data/data_session.h"
+#include "data/data_chat_filters.h"
+#include "ayu/features/folder_lock/folder_lock.h" // AyuGram
 #include "data/data_stories.h"
 #include "data/data_user.h"
 #include "dialogs/ui/dialogs_stories_list.h"
@@ -63,9 +65,14 @@ Content State::next() {
 		not_null<PeerData*>,
 		std::shared_ptr<Ui::DynamicImage>>();
 	userpics.reserve(sources.size());
+	const auto &lock = _data->owner().chatsFilters().folderLock();
 	for (const auto &info : sources) {
 		const auto source = _data->source(info.id);
 		Assert(source != nullptr);
+		if (lock.isLocked(source->peer)) {
+			--result.total;
+			continue; // AyuGram
+		}
 
 		auto userpic = std::shared_ptr<Ui::DynamicImage>();
 		const auto peer = source->peer;
@@ -100,9 +107,10 @@ rpl::producer<Content> ContentForSession(
 		const auto state = result.make_state<State>(stories, list);
 		rpl::single(
 			rpl::empty
-		) | rpl::then(
-			stories->sourcesChanged(list)
-		) | rpl::on_next([=] {
+		) | rpl::then(rpl::merge(
+			stories->sourcesChanged(list),
+			session->data().chatsFilters().folderLock().lockChanges()
+		)) | rpl::on_next([=] {
 			consumer.put_next(state->next());
 		}, result);
 		return result;

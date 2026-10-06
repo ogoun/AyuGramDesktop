@@ -95,6 +95,7 @@ https://github.com/telegramdesktop/tdesktop/blob/master/LEGAL
 
 // AyuGram includes
 #include "ayu/ayu_settings.h"
+#include "ayu/features/folder_lock/folder_lock.h"
 #include "ayu/data/messages_storage.h"
 #include "ayu/features/filters/filters_controller.h"
 #include "ayu/utils/telegram_helpers.h"
@@ -3680,12 +3681,39 @@ HistoryItem *Session::addNewMessage(
 	return result;
 }
 
+// AyuGram: unread of chats of locked protected folders, they stay silent.
+Dialogs::UnreadState Session::ayuLockedUnreadState() const {
+	auto result = Dialogs::UnreadState();
+	const auto &lock = _chatsFilters->folderLock();
+	if (!lock.anyLocked()) {
+		return result;
+	}
+	const auto add = [&](not_null<const Dialogs::MainList*> list) {
+		for (const auto &row : list->indexed()->all()) {
+			if (const auto history = row->history()) {
+				if (lock.isLocked(not_null(history))) {
+					result += history->chatListUnreadState();
+				}
+			}
+		}
+	};
+	add(&_chatsList);
+	if (const auto folder = folderLoaded(Data::Folder::kId)) {
+		add(folder->chatsList());
+	}
+	return result;
+}
+
+Dialogs::UnreadState Session::ayuVisibleUnreadState() const {
+	return _chatsList.unreadState() - ayuLockedUnreadState();
+}
+
 int Session::unreadBadge() const {
-	return computeUnreadBadge(_chatsList.unreadState());
+	return computeUnreadBadge(ayuVisibleUnreadState());
 }
 
 int Session::unreadWithMentionsBadge() const {
-	auto state = _chatsList.unreadState();
+	auto state = ayuVisibleUnreadState();
 	if (state.mentions) {
 		state.messages -= state.mentions;
 	}
@@ -3693,11 +3721,11 @@ int Session::unreadWithMentionsBadge() const {
 }
 
 bool Session::unreadBadgeMuted() const {
-	return computeUnreadBadgeMuted(_chatsList.unreadState());
+	return computeUnreadBadgeMuted(ayuVisibleUnreadState());
 }
 
 bool Session::unreadWithMentionsBadgeMuted() const {
-	const auto state = _chatsList.unreadState();
+	const auto state = ayuVisibleUnreadState();
 	return !state.mentions && computeUnreadBadgeMuted(state);
 }
 
@@ -3705,7 +3733,7 @@ int Session::unreadBadgeIgnoreOne(Dialogs::Key key) const {
 	const auto remove = (key && key.entry()->inChatList())
 		? key.entry()->chatListUnreadState()
 		: Dialogs::UnreadState();
-	return computeUnreadBadge(_chatsList.unreadState() - remove);
+	return computeUnreadBadge(ayuVisibleUnreadState() - remove);
 }
 
 bool Session::unreadBadgeMutedIgnoreOne(Dialogs::Key key) const {
@@ -3715,11 +3743,11 @@ bool Session::unreadBadgeMutedIgnoreOne(Dialogs::Key key) const {
 	const auto remove = (key && key.entry()->inChatList())
 		? key.entry()->chatListUnreadState()
 		: Dialogs::UnreadState();
-	return computeUnreadBadgeMuted(_chatsList.unreadState() - remove);
+	return computeUnreadBadgeMuted(ayuVisibleUnreadState() - remove);
 }
 
 int Session::unreadOnlyMutedBadge() const {
-	const auto state = _chatsList.unreadState();
+	const auto state = ayuVisibleUnreadState();
 	return Core::App().settings().countUnreadMessages()
 		? state.messagesMuted
 		: state.chatsMuted;
@@ -5754,7 +5782,10 @@ void Session::refreshChatListEntry(Dialogs::Key key) {
 			continue;
 		}
 		auto event = ChatListEntryRefresh{ .key = key, .filterId = id };
-		if (filter.contains(history)) {
+		const auto locked = _chatsFilters->folderLock().isLockedForList(
+			history,
+			id); // AyuGram
+		if (!locked && filter.contains(history)) {
 			const auto filterList = chatsFilters().chatsList(id);
 			event.existenceChanged = !entry->inChatList(id);
 			if (event.existenceChanged) {
@@ -5815,16 +5846,18 @@ void Session::removeChatListEntry(Dialogs::Key key) {
 	}
 	Assert(entry->folderKnown());
 
-	// AyuGram: the virtual "All chats" list.
-	if (entry->inChatList(Dialogs::kAyuAllChatsVisibleFilterId)) {
-		entry->removeFromChatList(
+	// AyuGram: the virtual "All chats" and "Archive" lists.
+	for (const auto id : {
 			Dialogs::kAyuAllChatsVisibleFilterId,
-			chatsFilters().chatsList(Dialogs::kAyuAllChatsVisibleFilterId));
-		_chatListEntryRefreshes.fire(ChatListEntryRefresh{
-			.key = key,
-			.filterId = Dialogs::kAyuAllChatsVisibleFilterId,
-			.existenceChanged = true
-		});
+			Dialogs::kAyuArchiveVisibleFilterId }) {
+		if (entry->inChatList(id)) {
+			entry->removeFromChatList(id, chatsFilters().chatsList(id));
+			_chatListEntryRefreshes.fire(ChatListEntryRefresh{
+				.key = key,
+				.filterId = id,
+				.existenceChanged = true
+			});
+		}
 	}
 
 	for (const auto &filter : _chatsFilters->list()) {
@@ -5859,34 +5892,51 @@ void Session::removeChatListEntry(Dialogs::Key key) {
 // AyuGram: keeps the virtual "All chats" list (main list without chats of the
 // folders marked "Don't show chats in All Chats") in sync with the main list.
 void Session::ayuRefreshAllChatsVisibleEntry(Dialogs::Key key) {
-	constexpr auto id = Dialogs::kAyuAllChatsVisibleFilterId;
 	const auto entry = key.entry();
 	const auto history = entry->asHistory();
-	const auto should = _chatsFilters->ayuHidesFromAllChats()
-		&& entry->inChatList()
-		&& entry->folderKnown()
-		&& (chatsListFor(entry).get() == &_chatsList)
+	const auto &lock = _chatsFilters->folderLock();
+	const auto known = entry->inChatList() && entry->folderKnown();
+	const auto list = known ? chatsListFor(entry).get() : nullptr;
+	const auto archive = folderLoaded(Data::Folder::kId);
+	const auto inMain = (list == &_chatsList);
+	const auto inArchive = archive && (list == archive->chatsList().get());
+	const auto anyLocked = lock.anyLocked();
+	const auto locked = anyLocked && history && lock.isLocked(history);
+
+	const auto allShould = (_chatsFilters->ayuHidesFromAllChats() || anyLocked)
+		&& inMain
 		&& (entry->asFolder()
-			|| (history && !_chatsFilters->ayuHiddenFromAllChats(history)));
-	if (!should && !entry->inChatList(id)) {
-		return;
-	}
-	const auto list = chatsFilters().chatsList(id);
-	auto event = ChatListEntryRefresh{ .key = key, .filterId = id };
-	if (should) {
-		event.existenceChanged = !entry->inChatList(id);
-		if (event.existenceChanged) {
-			entry->addToChatList(id, list);
-		} else {
-			event.moved = entry->adjustByPosInChatList(id, list);
+			|| (history
+				&& !locked
+				&& !_chatsFilters->ayuHiddenFromAllChats(history)));
+	const auto archiveShould = anyLocked
+		&& inArchive
+		&& history
+		&& !locked;
+
+	const auto apply = [&](FilterId id, bool should) {
+		if (!should && !entry->inChatList(id)) {
+			return;
 		}
-	} else {
-		entry->removeFromChatList(id, list);
-		event.existenceChanged = true;
-	}
-	if (event) {
-		_chatListEntryRefreshes.fire(std::move(event));
-	}
+		const auto list = chatsFilters().chatsList(id);
+		auto event = ChatListEntryRefresh{ .key = key, .filterId = id };
+		if (should) {
+			event.existenceChanged = !entry->inChatList(id);
+			if (event.existenceChanged) {
+				entry->addToChatList(id, list);
+			} else {
+				event.moved = entry->adjustByPosInChatList(id, list);
+			}
+		} else {
+			entry->removeFromChatList(id, list);
+			event.existenceChanged = true;
+		}
+		if (event) {
+			_chatListEntryRefreshes.fire(std::move(event));
+		}
+	};
+	apply(Dialogs::kAyuAllChatsVisibleFilterId, allShould);
+	apply(Dialogs::kAyuArchiveVisibleFilterId, archiveShould);
 }
 
 void Session::ayuRefreshAllChatsVisible() {
@@ -5898,7 +5948,12 @@ void Session::ayuRefreshAllChatsVisible() {
 		}
 	};
 	collect(&_chatsList);
-	collect(chatsFilters().chatsList(id)); // Remove stale entries.
+	if (const auto folder = folderLoaded(Data::Folder::kId)) {
+		collect(folder->chatsList());
+	}
+	// Remove stale entries.
+	collect(chatsFilters().chatsList(id));
+	collect(chatsFilters().chatsList(Dialogs::kAyuArchiveVisibleFilterId));
 	for (const auto &key : keys) {
 		ayuRefreshAllChatsVisibleEntry(key);
 	}

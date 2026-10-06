@@ -10,6 +10,8 @@ https://github.com/telegramdesktop/tdesktop/blob/master/LEGAL
 #include "core/version.h"
 #include "data/data_peer.h"
 #include "data/data_session.h"
+#include "data/data_chat_filters.h"
+#include "ayu/features/folder_lock/folder_lock.h" // AyuGram
 #include "data/data_thread.h"
 #include "history/history.h"
 #include "main/main_session.h"
@@ -143,8 +145,12 @@ std::vector<not_null<Thread*>> RecentPeers::collectChatOpenHistory() const {
 	_session->local().readSearchSuggestions();
 	auto result = std::vector<not_null<Thread*>>();
 	result.reserve(_opens.size());
+	const auto &lock = _session->data().chatsFilters().folderLock();
 	for (const auto &weak : _opens) {
 		if (const auto thread = weak.get()) {
+			if (lock.isLocked(thread->owningHistory())) {
+				continue; // AyuGram
+			}
 			result.push_back(thread);
 		}
 	}

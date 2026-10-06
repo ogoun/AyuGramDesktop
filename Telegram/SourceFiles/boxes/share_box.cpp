@@ -68,6 +68,8 @@ https://github.com/telegramdesktop/tdesktop/blob/master/LEGAL
 #include <QtGui/QClipboard>
 
 // AyuGram includes
+#include "ayu/features/folder_lock/folder_lock.h"
+#include "data/data_chat_filters.h"
 #include "ayu/features/forward/ayu_forward.h"
 
 
@@ -858,6 +860,10 @@ ShareBox::Inner::Inner(
 	const auto addList = [&](not_null<Dialogs::IndexedList*> list) {
 		for (const auto &row : list->all()) {
 			if (const auto history = row->history()) {
+				if (history->owner().chatsFilters().folderLock().isLocked(
+						not_null(history))) {
+					continue; // AyuGram
+				}
 				if (!history->peer->isSelf()
 					&& (history->asForum()
 						|| JoinedCommunityChats(history->peer)
@@ -1660,6 +1666,10 @@ void ShareBox::Inner::applyChatFilter(FilterId id) {
 		const auto addList = [&](not_null<Dialogs::IndexedList*> list) {
 			for (const auto &row : list->all()) {
 				if (const auto history = row->history()) {
+					if (history->owner().chatsFilters().folderLock().isLocked(
+							not_null(history))) {
+						continue; // AyuGram
+					}
 					if (history->asForum()
 							|| JoinedCommunityChats(history->peer)
 							|| _descriptor.filterCallback(history)) {
@@ -1691,6 +1701,10 @@ void ShareBox::Inner::peopleReceived(
 					peerFromMTP(data))) {
 				const auto history = _descriptor.session->data().history(
 					peer);
+				if (history->owner().chatsFilters().folderLock().isLocked(
+						history)) {
+					continue; // AyuGram
+				}
 				if (!history->asForum()
 					&& !JoinedCommunityChats(peer)
 					&& !_descriptor.filterCallback(history)) {

@@ -16,6 +16,7 @@ https://github.com/telegramdesktop/tdesktop/blob/master/LEGAL
 #include "data/stickers/data_custom_emoji.h"
 #include "data/data_chat_filters.h"
 #include "data/data_folder.h"
+#include "ayu/features/folder_lock/folder_lock.h" // AyuGram
 #include "data/data_forum.h"
 #include "data/data_forum_topic.h"
 #include "data/data_messages.h"
@@ -69,6 +70,9 @@ constexpr auto kBounceDuration = crl::time(400);
 		const auto history = row->history();
 		if (!history || history == current) {
 			continue;
+		} else if (history->owner().chatsFilters().folderLock().isLocked(
+				not_null(history))) {
+			continue; // AyuGram
 		}
 		const auto peer = history->peer;
 		if (peer->isBroadcast()

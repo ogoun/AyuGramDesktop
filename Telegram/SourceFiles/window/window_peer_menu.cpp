@@ -140,6 +140,8 @@ https://github.com/telegramdesktop/tdesktop/blob/master/LEGAL
 #include <QtWidgets/QApplication>
 
 // AyuGram includes
+#include "ayu/features/folder_lock/folder_lock.h"
+#include "data/data_chat_filters.h"
 #include "ayu/utils/telegram_helpers.h"
 #include "styles/style_ayu_icons.h"
 #include "ayu/ui/context_menu/context_menu.h"
@@ -3460,6 +3462,10 @@ base::weak_qptr<Ui::BoxContent> ShowForwardMessagesBox(
 		const auto addList = [&](auto chats) {
 			for (const auto &row : chats->all()) {
 				if (const auto history = row->history()) {
+					if (history->owner().chatsFilters().folderLock().isLocked(
+							not_null(history))) {
+						continue; // AyuGram
+					}
 					state->list.push_back(history->peer);
 				}
 			}

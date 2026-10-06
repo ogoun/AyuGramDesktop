@@ -56,6 +56,8 @@ https://github.com/telegramdesktop/tdesktop/blob/master/LEGAL
 
 // AyuGram includes
 #include "ayu/ayu_settings.h"
+#include "ayu/features/folder_lock/folder_lock.h"
+#include "data/data_chat_filters.h"
 #include "ayu/utils/telegram_helpers.h"
 
 
@@ -454,6 +456,11 @@ void System::schedule(Data::ItemNotification notification) {
 		return;
 	}
 	if (isMessageHidden(item)) {
+		thread->popNotification(notification);
+		return;
+	}
+	if (item->history()->owner().chatsFilters().folderLock().isLocked(
+			item->history())) { // AyuGram: silent while the folder is locked.
 		thread->popNotification(notification);
 		return;
 	}
@@ -1345,12 +1352,18 @@ Window::SessionController *Manager::openNotificationMessage(
 		not_null<History*> history,
 		MsgId messageId,
 		bool openSeparated) {
-	if (Core::App().passcodeLocked()) {
+	const auto folderLocked = history->owner().chatsFilters().folderLock()
+		.isLocked(history); // AyuGram
+	if (Core::App().passcodeLocked() || folderLocked) {
 		const auto window = history->session().tryResolveWindow();
 		if (window) {
 			window->widget()->showFromTray();
 			window->widget()->setInnerFocus();
-			system()->clearAll();
+			if (folderLocked) {
+				system()->clearFromHistory(history);
+			} else {
+				system()->clearAll();
+			}
 		}
 		return window;
 	}

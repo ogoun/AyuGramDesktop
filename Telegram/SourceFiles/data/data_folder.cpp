@@ -30,7 +30,9 @@ https://github.com/telegramdesktop/tdesktop/blob/master/LEGAL
 #include "styles/style_dialogs.h"
 
 // AyuGram includes
+#include "ayu/features/folder_lock/folder_lock.h"
 #include "ayu/ui/ayu_userpic.h"
+#include "data/data_chat_filters.h"
 
 
 namespace Data {
@@ -186,8 +188,26 @@ void Folder::oneListMessageChanged(HistoryItem *from, HistoryItem *to) {
 	}
 }
 
-// AyuGram: filled in by the folder lock list integration.
+// AyuGram: chats of a locked protected folder don't leak via the archive row.
+Dialogs::UnreadState Folder::ayuLockedUnreadState() const {
+	auto result = Dialogs::UnreadState();
+	const auto &lock = owner().chatsFilters().folderLock();
+	if (!lock.anyLocked()) {
+		return result;
+	}
+	for (const auto &row : _chatsList.indexed()->all()) {
+		if (const auto history = row->history()) {
+			if (lock.isLocked(not_null(history))) {
+				result += history->chatListUnreadState();
+			}
+		}
+	}
+	return result;
+}
+
 void Folder::ayuRefreshLocked() {
+	reorderLastHistories();
+	updateChatListEntry();
 }
 
 void Folder::reorderLastHistories() {
@@ -205,8 +225,10 @@ void Folder::reorderLastHistories() {
 		*_chatsList.indexed()
 	) | ranges::views::transform([](not_null<Dialogs::Row*> row) {
 		return row->history();
-	}) | ranges::views::filter([](History *history) {
-		return (history != nullptr);
+	}) | ranges::views::filter([&](History *history) {
+		return (history != nullptr)
+			&& !owner().chatsFilters().folderLock().isLocked(
+				not_null(history)); // AyuGram
 	});
 	auto nonPinnedChecked = 0;
 	for (const auto history : histories) {
@@ -392,7 +414,7 @@ Dialogs::UnreadState Folder::chatListUnreadState() const {
 
 Dialogs::BadgesState Folder::chatListBadgesState() const {
 	auto result = Dialogs::BadgesForUnread(
-		chatListUnreadState(),
+		chatListUnreadState() - ayuLockedUnreadState(), // AyuGram
 		Dialogs::CountInBadge::Chats,
 		Dialogs::IncludeInBadge::All);
 	result.unreadMuted

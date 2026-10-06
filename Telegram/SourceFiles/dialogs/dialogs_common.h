@@ -27,6 +27,8 @@ class Row;
 // marked "Don't show chats in All Chats". Sorted like the main list (pinned
 // chats on top), see Entry::sortKeyInChatList().
 inline constexpr auto kAyuAllChatsVisibleFilterId = int32(0x7FFFFF00);
+// AyuGram: the same for the Archive while a protected folder is locked.
+inline constexpr auto kAyuArchiveVisibleFilterId = int32(0x7FFFFF01);
 
 enum class SortMode {
 	Date    = 0x00,

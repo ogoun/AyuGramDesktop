@@ -470,7 +470,7 @@ private:
 	void fillSupportSearchMenu(not_null<Ui::PopupMenu*> menu);
 
 	void refreshShownList();
-	[[nodiscard]] bool ayuAllChatsVisibleWanted() const; // AyuGram
+	[[nodiscard]] FilterId ayuWantedVirtualId() const; // AyuGram
 	void ayuApplyAllChatsVisibility(); // AyuGram
 	void rebuildCommunitySections();
 	void updateCommunityRequestableGeometry();
@@ -646,7 +646,7 @@ private:
 
 	not_null<IndexedList*> _shownList;
 	FilterId _filterId = 0;
-	bool _ayuAllChatsVisibleShown = false; // AyuGram
+	FilterId _ayuShownVirtualId = 0; // AyuGram
 	bool _mouseSelection = false;
 	std::optional<QPoint> _lastMousePosition;
 	int _lastRowLocalMouseX = -1;

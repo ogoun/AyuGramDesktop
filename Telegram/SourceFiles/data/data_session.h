@@ -1046,6 +1046,8 @@ private:
 	};
 
 	void ayuRefreshAllChatsVisibleEntry(Dialogs::Key key); // AyuGram
+	[[nodiscard]] Dialogs::UnreadState ayuLockedUnreadState() const;
+	[[nodiscard]] Dialogs::UnreadState ayuVisibleUnreadState() const;
 
 	void suggestStartExport();
 

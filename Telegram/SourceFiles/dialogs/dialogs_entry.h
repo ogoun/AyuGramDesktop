@@ -128,7 +128,9 @@ public:
 	}
 	void cachePinnedIndex(FilterId filterId, int index);
 	[[nodiscard]] uint64 sortKeyInChatList(FilterId filterId) const {
-		return (filterId && filterId != kAyuAllChatsVisibleFilterId)
+		return (filterId
+				&& filterId != kAyuAllChatsVisibleFilterId
+				&& filterId != kAyuArchiveVisibleFilterId)
 			? computeSortPosition(filterId)
 			: _sortKeyInChatList;
 	}

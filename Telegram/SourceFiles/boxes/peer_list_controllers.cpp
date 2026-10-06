@@ -58,6 +58,8 @@ https://github.com/telegramdesktop/tdesktop/blob/master/LEGAL
 #include "styles/style_premium.h"
 
 // AyuGram includes
+#include "ayu/features/folder_lock/folder_lock.h"
+#include "data/data_chat_filters.h"
 #include "styles/style_ayu_icons.h"
 
 
@@ -588,10 +590,16 @@ QString ChatsListBoxController::emptyBoxText() const {
 
 std::unique_ptr<PeerListRow> ChatsListBoxController::createSearchRow(
 		not_null<PeerData*> peer) {
+	if (peer->owner().chatsFilters().folderLock().isLocked(peer)) {
+		return nullptr; // AyuGram
+	}
 	return createRow(peer->owner().history(peer));
 }
 
 bool ChatsListBoxController::appendRow(not_null<History*> history) {
+	if (history->owner().chatsFilters().folderLock().isLocked(history)) {
+		return false; // AyuGram
+	}
 	if (auto row = delegate()->peerListFindRow(history->peer->id.value)) {
 		updateRowHook(static_cast<Row*>(row));
 		return false;
@@ -781,7 +789,9 @@ void ContactsBoxController::checkForEmptyRows() {
 
 std::unique_ptr<PeerListRow> ContactsBoxController::createSearchRow(
 		not_null<PeerData*> peer) {
-	if (const auto user = peer->asUser()) {
+	if (peer->owner().chatsFilters().folderLock().isLocked(peer)) {
+		return nullptr; // AyuGram
+	} else if (const auto user = peer->asUser()) {
 		return createRow(user);
 	}
 	return nullptr;
@@ -870,6 +880,10 @@ void ContactsBoxController::sortByOnline() {
 }
 
 bool ContactsBoxController::appendRow(not_null<UserData*> user) {
+	if (user->owner().chatsFilters().folderLock().isLocked(
+			not_null<PeerData*>(user))) {
+		return false; // AyuGram
+	}
 	if (auto row = delegate()->peerListFindRow(user->id.value)) {
 		updateRowHook(row);
 		return false;
