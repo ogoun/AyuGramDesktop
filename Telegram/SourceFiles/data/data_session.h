@@ -952,6 +952,7 @@ public:
 	void refreshChatListEntry(Dialogs::Key key);
 	void removeChatListEntry(Dialogs::Key key);
 	void ayuRefreshAllChatsVisible(); // AyuGram
+	void ayuRefreshAllChatLists(); // AyuGram
 	void refreshChatListUnreadOnTop();
 	[[nodiscard]] bool dialogsUnreadOnTop() const {
 		return _dialogsUnreadOnTop;

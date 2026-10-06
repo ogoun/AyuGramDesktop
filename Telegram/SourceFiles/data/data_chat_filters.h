@@ -21,6 +21,10 @@ namespace Ui {
 struct MoreChatsBarContent;
 } // namespace Ui
 
+namespace Ayu {
+class FolderLock;
+} // namespace Ayu
+
 namespace Data {
 
 class Session;
@@ -99,6 +103,8 @@ public:
 	[[nodiscard]] bool contains(
 		not_null<History*> history,
 		bool ignoreFakeUnread = false) const;
+	// AyuGram: rules without the dynamic NoMuted / NoRead / NoArchived.
+	[[nodiscard]] bool matchesRules(not_null<History*> history) const;
 
 private:
 	FilterId _id = 0;
@@ -222,6 +228,10 @@ public:
 		not_null<History*> history) const;
 	[[nodiscard]] rpl::producer<> ayuAllChatsVisibilityChanges() const;
 
+	// AyuGram: PIN-protected folders of this session.
+	[[nodiscard]] Ayu::FolderLock &folderLock();
+	[[nodiscard]] const Ayu::FolderLock &folderLock() const;
+
 private:
 	struct MoreChatsData {
 		std::vector<not_null<PeerData*>> missing;
@@ -276,6 +286,8 @@ private:
 
 	std::vector<FilterId> _ayuHiddenFromAllChats;
 	rpl::event_stream<> _ayuAllChatsVisibilityChanges;
+
+	std::unique_ptr<Ayu::FolderLock> _folderLock; // AyuGram
 
 	rpl::lifetime _lifetime;
 

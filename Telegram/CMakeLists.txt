@@ -49,6 +49,12 @@ if (DESKTOP_APP_TEST_APPS)
     include(cmake/tests.cmake)
 endif()
 
+# AyuGram
+option(AYU_TESTS "Build AyuGram unit tests." OFF)
+if (AYU_TESTS)
+    include(cmake/ayu_tests.cmake)
+endif()
+
 if (WIN32)
     include(cmake/generate_midl.cmake)
     generate_midl(Telegram ${src_loc}
@@ -227,6 +233,10 @@ set(ayugram_files
         ayu/features/forward/ayu_forward.h
         ayu/features/forward/ayu_forward_rich.cpp
         ayu/features/forward/ayu_forward_rich.h
+        ayu/features/folder_lock/folder_lock.cpp
+        ayu/features/folder_lock/folder_lock.h
+        ayu/features/folder_lock/folder_lock_crypto.cpp
+        ayu/features/folder_lock/folder_lock_crypto.h
         ayu/features/forward/ayu_sync.cpp
         ayu/features/forward/ayu_sync.h
         ayu/features/translator/ayu_translator.cpp

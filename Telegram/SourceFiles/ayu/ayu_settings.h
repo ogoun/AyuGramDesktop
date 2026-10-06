@@ -13,7 +13,11 @@
 #include "rpl/event_stream.h"
 #include "rpl/variable.h"
 
+#include <QtCore/QByteArray>
+
+#include <array>
 #include <map>
+#include <optional>
 #include <set>
 #include <unordered_set>
 
@@ -252,6 +256,18 @@ private:
 void to_json(nlohmann::json &j, const MessageShotSettings &s);
 void from_json(const nlohmann::json &j, MessageShotSettings &s);
 
+// AyuGram: PIN protection of a chats folder (see ayu/features/folder_lock).
+struct FolderProtectionRecord {
+	int autolockMinutes = 15;
+	QByteArray salt;
+	uint64 kdfN = 0;
+	uint64 kdfR = 0;
+	uint64 kdfP = 0;
+	std::array<QByteArray, 2> slots;
+	int badTries = 0;
+	int64 lastBadTry = 0;
+};
+
 class AyuSettings {
 public:
 	AyuSettings(const AyuSettings &) = delete;
@@ -376,6 +392,17 @@ public:
 	void setFolderHiddenFromAllChats(uint64 userId, int filterId, bool hidden);
 	[[nodiscard]] rpl::producer<> foldersHiddenFromAllChatsChanges() const {
 		return _foldersHiddenFromAllChatsChanges.events();
+	}
+
+	[[nodiscard]] std::optional<FolderProtectionRecord> folderProtection(
+		uint64 userId,
+		int filterId) const;
+	void setFolderProtection(
+		uint64 userId,
+		int filterId,
+		std::optional<FolderProtectionRecord> record);
+	[[nodiscard]] rpl::producer<> folderProtectionChanges() const {
+		return _folderProtectionChanges.events();
 	}
 
 	void setSaveDeletedMessages(bool val);
@@ -740,6 +767,8 @@ private:
 	rpl::variable<PeerSearchMode> _peerSearchMode = PeerSearchMode::All;
 	std::map<uint64, std::set<int>> _foldersHiddenFromAllChats;
 	rpl::event_stream<> _foldersHiddenFromAllChatsChanges;
+	std::map<uint64, std::map<int, FolderProtectionRecord>> _folderProtection;
+	rpl::event_stream<> _folderProtectionChanges;
 
 	rpl::variable<bool> _useGlobalGhostMode = true;
 	std::map<uint64, std::unique_ptr<GhostModeAccountSettings>> _ghostAccounts;

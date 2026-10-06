@@ -79,6 +79,8 @@ public:
 	[[nodiscard]] int storiesCount() const;
 	[[nodiscard]] int storiesUnreadCount() const;
 
+	void ayuRefreshLocked(); // AyuGram
+
 private:
 	void indexNameParts();
 

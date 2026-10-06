@@ -186,6 +186,10 @@ void Folder::oneListMessageChanged(HistoryItem *from, HistoryItem *to) {
 	}
 }
 
+// AyuGram: filled in by the folder lock list integration.
+void Folder::ayuRefreshLocked() {
+}
+
 void Folder::reorderLastHistories() {
 	// We want first kShowChatNamesCount histories, by last message date.
 	const auto pred = [](not_null<History*> a, not_null<History*> b) {

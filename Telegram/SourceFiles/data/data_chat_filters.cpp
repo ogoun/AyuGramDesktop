@@ -27,6 +27,7 @@ https://github.com/telegramdesktop/tdesktop/blob/master/LEGAL
 
 // AyuGram includes
 #include "ayu/ayu_settings.h"
+#include "ayu/features/folder_lock/folder_lock.h"
 
 
 namespace Data {
@@ -391,6 +392,32 @@ bool ChatFilter::contains(
 		|| _always.contains(history);
 }
 
+bool ChatFilter::matchesRules(not_null<History*> history) const {
+	if (_never.contains(history)) {
+		return false;
+	} else if (_always.contains(history)) {
+		return true;
+	}
+	const auto peer = history->peer;
+	const auto channel = peer->asChannel();
+	if (channel && channel->isCommunity()) {
+		return false;
+	}
+	const auto flag = [&] {
+		if (const auto user = peer->asUser()) {
+			return user->isBot()
+				? Flag::Bots
+				: user->isContact()
+				? Flag::Contacts
+				: Flag::NonContacts;
+		} else if (channel && channel->isBroadcast()) {
+			return Flag::Channels;
+		}
+		return Flag::Groups;
+	}();
+	return (_flags & flag) != 0;
+}
+
 ChatFilters::ChatFilters(not_null<Session*> owner)
 : _owner(owner)
 , _moreChatsTimer([=] { checkLoadMoreChatsLists(); }) {
@@ -426,6 +453,25 @@ ChatFilters::ChatFilters(not_null<Session*> owner)
 	) | rpl::on_next([=] {
 		ayuRefreshHiddenFromAllChats();
 	}, _lifetime);
+
+	// AyuGram: folder rules may have changed, close protected folders and
+	// recount what is hidden.
+	_listChanged.events() | rpl::on_next([=] {
+		if (_folderLock) {
+			_folderLock->rulesChanged();
+		}
+	}, _lifetime);
+}
+
+Ayu::FolderLock &ChatFilters::folderLock() {
+	if (!_folderLock) {
+		_folderLock = std::make_unique<Ayu::FolderLock>(&_owner->session());
+	}
+	return *_folderLock;
+}
+
+const Ayu::FolderLock &ChatFilters::folderLock() const {
+	return const_cast<ChatFilters*>(this)->folderLock();
 }
 
 void ChatFilters::ayuRefreshHiddenFromAllChats() {
@@ -796,6 +842,10 @@ void ChatFilters::applyRemove(int position) {
 		_owner->session().userId().bare,
 		filter.id(),
 		false);
+	AyuSettings::getInstance().setFolderProtection(
+		_owner->session().userId().bare,
+		filter.id(),
+		std::nullopt);
 }
 
 bool ChatFilters::applyChange(ChatFilter &filter, ChatFilter &&updated) {

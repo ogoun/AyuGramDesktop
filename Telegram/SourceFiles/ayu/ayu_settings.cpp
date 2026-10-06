@@ -1101,6 +1101,39 @@ void AyuSettings::setFolderHiddenFromAllChats(uint64 userId, int filterId, bool 
 	_foldersHiddenFromAllChatsChanges.fire({});
 }
 
+std::optional<FolderProtectionRecord> AyuSettings::folderProtection(
+		uint64 userId,
+		int filterId) const {
+	const auto i = _folderProtection.find(userId);
+	if (i == _folderProtection.end()) {
+		return std::nullopt;
+	}
+	const auto j = i->second.find(filterId);
+	if (j == i->second.end()) {
+		return std::nullopt;
+	}
+	return j->second;
+}
+
+void AyuSettings::setFolderProtection(
+		uint64 userId,
+		int filterId,
+		std::optional<FolderProtectionRecord> record) {
+	if (record) {
+		_folderProtection[userId][filterId] = std::move(*record);
+	} else {
+		const auto i = _folderProtection.find(userId);
+		if (i == _folderProtection.end() || !i->second.erase(filterId)) {
+			return;
+		}
+		if (i->second.empty()) {
+			_folderProtection.erase(i);
+		}
+	}
+	save();
+	_folderProtectionChanges.fire({});
+}
+
 void to_json(nlohmann::json &j, const AyuSettings &s) {
 	auto ghostAccounts = nlohmann::json::object();
 	for (const auto &[key, value] : s._ghostAccounts) {
@@ -1109,6 +1142,28 @@ void to_json(nlohmann::json &j, const AyuSettings &s) {
 	auto foldersHiddenFromAllChats = nlohmann::json::object();
 	for (const auto &[key, value] : s._foldersHiddenFromAllChats) {
 		foldersHiddenFromAllChats[std::to_string(key)] = value;
+	}
+	auto folderProtection = nlohmann::json::object();
+	for (const auto &[userId, folders] : s._folderProtection) {
+		auto byFolder = nlohmann::json::object();
+		for (const auto &[filterId, r] : folders) {
+			byFolder[std::to_string(filterId)] = nlohmann::json{
+				{ "autolockMinutes", r.autolockMinutes },
+				{ "salt", r.salt.toBase64().toStdString() },
+				{ "kdf", {
+					{ "N", r.kdfN },
+					{ "r", r.kdfR },
+					{ "p", r.kdfP },
+				} },
+				{ "slots", {
+					r.slots[0].toBase64().toStdString(),
+					r.slots[1].toBase64().toStdString(),
+				} },
+				{ "badTries", r.badTries },
+				{ "lastBadTry", r.lastBadTry },
+			};
+		}
+		folderProtection[std::to_string(userId)] = std::move(byFolder);
 	}
 
 	j = nlohmann::json{
@@ -1203,6 +1258,7 @@ void to_json(nlohmann::json &j, const AyuSettings &s) {
 		{"streamerMode", s._streamerMode.current()},
 		{"peerSearchMode", s._peerSearchMode.current()},
 		{"foldersHiddenFromAllChats", foldersHiddenFromAllChats},
+		{"folderProtection", folderProtection},
 		{"messageShotSettings", s._messageShotSettings}
 	};
 }
@@ -1316,6 +1372,50 @@ void from_json(const nlohmann::json &j, AyuSettings &s) {
 			if (value.is_array()) {
 				s._foldersHiddenFromAllChats[std::stoull(key)]
 					= value.get<std::set<int>>();
+			}
+		}
+	}
+
+	if (j.contains("folderProtection") && j["folderProtection"].is_object()) {
+		s._folderProtection.clear();
+		const auto bytes = [](const nlohmann::json &value) {
+			return value.is_string()
+				? QByteArray::fromBase64(
+					QByteArray::fromStdString(value.get<std::string>()))
+				: QByteArray();
+		};
+		for (auto &[userKey, folders] : j["folderProtection"].items()) {
+			if (!folders.is_object()) {
+				continue;
+			}
+			for (auto &[filterKey, value] : folders.items()) {
+				if (!value.is_object()) {
+					continue;
+				}
+				// A damaged record is kept: the folder stays locked.
+				auto r = FolderProtectionRecord();
+				r.autolockMinutes = value.value("autolockMinutes", 15);
+				r.salt = bytes(value.value("salt", nlohmann::json()));
+				const auto kdf = value.value(
+					"kdf",
+					nlohmann::json::object());
+				if (kdf.is_object()) {
+					r.kdfN = kdf.value("N", uint64(0));
+					r.kdfR = kdf.value("r", uint64(0));
+					r.kdfP = kdf.value("p", uint64(0));
+				}
+				const auto slots = value.value(
+					"slots",
+					nlohmann::json::array());
+				for (auto i = 0; i != 2; ++i) {
+					r.slots[i] = (slots.is_array() && slots.size() > size_t(i))
+						? bytes(slots[i])
+						: QByteArray();
+				}
+				r.badTries = value.value("badTries", 0);
+				r.lastBadTry = value.value("lastBadTry", int64(0));
+				s._folderProtection[std::stoull(userKey)][std::stoi(filterKey)]
+					= std::move(r);
 			}
 		}
 	}

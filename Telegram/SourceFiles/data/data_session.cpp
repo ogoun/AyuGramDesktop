@@ -5904,6 +5904,30 @@ void Session::ayuRefreshAllChatsVisible() {
 	}
 }
 
+// AyuGram: re-evaluates every chat list entry, used when protected folders
+// get locked or unlocked.
+void Session::ayuRefreshAllChatLists() {
+	auto keys = std::vector<Dialogs::Key>();
+	const auto collect = [&](not_null<Dialogs::MainList*> list) {
+		for (const auto &row : list->indexed()->all()) {
+			keys.push_back(row->key());
+		}
+	};
+	collect(&_chatsList);
+	if (const auto folder = folderLoaded(Data::Folder::kId)) {
+		collect(folder->chatsList());
+	}
+	for (const auto &key : keys) {
+		if (key.entry()->inChatList() && key.entry()->folderKnown()) {
+			refreshChatListEntry(key);
+		}
+	}
+	ayuRefreshAllChatsVisible();
+	if (const auto folder = folderLoaded(Data::Folder::kId)) {
+		folder->ayuRefreshLocked();
+	}
+}
+
 auto Session::chatListEntryRefreshes() const
 -> rpl::producer<ChatListEntryRefresh> {
 	return _chatListEntryRefreshes.events();
