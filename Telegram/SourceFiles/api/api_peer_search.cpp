@@ -38,6 +38,12 @@ void PeerSearch::request(
 		Fn<void(PeerSearchResult)> callback,
 		RequestType type) {
 	using namespace Dialogs;
+	// AyuGram: results depend on the search mode, drop them when it changes.
+	if (const auto mode = AyuSettings::getInstance().peerSearchMode()
+		; mode != _mode) {
+		clear();
+		_mode = mode;
+	}
 	_query = Api::ConvertPeerSearchQuery(query);
 	_callback = callback;
 	if (_query.isEmpty()
@@ -66,8 +72,14 @@ void PeerSearch::request(
 }
 
 void PeerSearch::requestPeers() {
+	using Flag = MTPcontacts_Search::Flag;
+	const auto flags = (_mode == PeerSearchMode::Bots) // AyuGram
+		? Flag::f_bots
+		: (_mode == PeerSearchMode::Channels)
+		? Flag::f_broadcasts
+		: Flag();
 	const auto requestId = _session->api().request(MTPcontacts_Search(
-		MTP_flags(0),
+		MTP_flags(flags),
 		MTP_string(_query),
 		MTP_int(SearchPeopleLimit)
 	)).done([=](const MTPcontacts_Found &result, mtpRequestId requestId) {

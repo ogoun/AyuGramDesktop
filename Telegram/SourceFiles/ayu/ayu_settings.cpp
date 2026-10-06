@@ -508,6 +508,7 @@ void AyuSettings::validate() {
 	validateEnum(_showRepeatMessageInContextMenu, defaults._showRepeatMessageInContextMenu);
 	validateEnum(_showAddFilterInContextMenu, defaults._showAddFilterInContextMenu);
 
+	validateEnum(_peerSearchMode, defaults._peerSearchMode);
 	validateEnum(_translationProvider, defaults._translationProvider, 3);
 	if ((_translationProvider.current() == TranslationProvider::Native)
 		&& !Platform::IsTranslateProviderAvailable()) {
@@ -1069,10 +1070,45 @@ void AyuSettings::setStreamerMode(bool val) {
 	save();
 }
 
+void AyuSettings::setPeerSearchMode(PeerSearchMode val) {
+	if (_peerSearchMode.current() == val) return;
+	_peerSearchMode = val;
+	save();
+}
+
+bool AyuSettings::isFolderHiddenFromAllChats(uint64 userId, int filterId) const {
+	const auto i = _foldersHiddenFromAllChats.find(userId);
+	return (i != _foldersHiddenFromAllChats.end()) && i->second.contains(filterId);
+}
+
+std::set<int> AyuSettings::foldersHiddenFromAllChats(uint64 userId) const {
+	const auto i = _foldersHiddenFromAllChats.find(userId);
+	return (i != _foldersHiddenFromAllChats.end()) ? i->second : std::set<int>();
+}
+
+void AyuSettings::setFolderHiddenFromAllChats(uint64 userId, int filterId, bool hidden) {
+	if (isFolderHiddenFromAllChats(userId, filterId) == hidden) return;
+	auto &set = _foldersHiddenFromAllChats[userId];
+	if (hidden) {
+		set.insert(filterId);
+	} else {
+		set.erase(filterId);
+		if (set.empty()) {
+			_foldersHiddenFromAllChats.erase(userId);
+		}
+	}
+	save();
+	_foldersHiddenFromAllChatsChanges.fire({});
+}
+
 void to_json(nlohmann::json &j, const AyuSettings &s) {
 	auto ghostAccounts = nlohmann::json::object();
 	for (const auto &[key, value] : s._ghostAccounts) {
 		ghostAccounts[std::to_string(key)] = *value;
+	}
+	auto foldersHiddenFromAllChats = nlohmann::json::object();
+	for (const auto &[key, value] : s._foldersHiddenFromAllChats) {
+		foldersHiddenFromAllChats[std::to_string(key)] = value;
 	}
 
 	j = nlohmann::json{
@@ -1165,6 +1201,8 @@ void to_json(nlohmann::json &j, const AyuSettings &s) {
 		{"avatarCorners", s._avatarCorners.current()},
 		{"singleCornerRadius", s._singleCornerRadius.current()},
 		{"streamerMode", s._streamerMode.current()},
+		{"peerSearchMode", s._peerSearchMode.current()},
+		{"foldersHiddenFromAllChats", foldersHiddenFromAllChats},
 		{"messageShotSettings", s._messageShotSettings}
 	};
 }
@@ -1269,6 +1307,18 @@ void from_json(const nlohmann::json &j, AyuSettings &s) {
 	s._avatarCorners = j.value("avatarCorners", defaults._avatarCorners.current());
 	s._singleCornerRadius = j.value("singleCornerRadius", defaults._singleCornerRadius.current());
 	s._streamerMode = j.value("streamerMode", defaults._streamerMode.current());
+	s._peerSearchMode = j.value("peerSearchMode", defaults._peerSearchMode.current());
+
+	if (j.contains("foldersHiddenFromAllChats")
+		&& j["foldersHiddenFromAllChats"].is_object()) {
+		s._foldersHiddenFromAllChats.clear();
+		for (auto &[key, value] : j["foldersHiddenFromAllChats"].items()) {
+			if (value.is_array()) {
+				s._foldersHiddenFromAllChats[std::stoull(key)]
+					= value.get<std::set<int>>();
+			}
+		}
+	}
 
 	if (j.contains("messageShotSettings") && j["messageShotSettings"].is_object()) {
 		j["messageShotSettings"].get_to(s._messageShotSettings);

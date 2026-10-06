@@ -594,6 +594,13 @@ InnerWidget::InnerWidget(
 
 	handleChatListEntryRefreshes();
 
+	// AyuGram: "All chats" without chats of the hidden folders.
+	session().data().chatsFilters().ayuAllChatsVisibilityChanges(
+	) | rpl::on_next([=] {
+		ayuApplyAllChatsVisibility();
+	}, lifetime());
+	refreshShownList();
+
 	refreshWithCollapsedRows(true);
 
 	setupShortcuts();
@@ -2798,7 +2805,8 @@ void InnerWidget::startReorderPinned(QPoint localPosition) {
 	Expects(_dragging != nullptr);
 
 	cancelChatPreview();
-	if (updateReorderIndexGetCount() < 2) {
+	// AyuGram: pinned order is index based, the virtual list may skip chats.
+	if (_ayuAllChatsVisibleShown || updateReorderIndexGetCount() < 2) {
 		_dragging = nullptr;
 	} else {
 		const auto &order = pinnedChatsOrder();
@@ -3410,7 +3418,10 @@ void InnerWidget::handleChatListEntryRefreshes() {
 	using Event = Data::Session::ChatListEntryRefresh;
 	session().data().chatListEntryRefreshes(
 	) | rpl::filter([=](const Event &event) {
-		if (event.filterId != _filterId) {
+		const auto shownFilterId = _ayuAllChatsVisibleShown // AyuGram
+			? kAyuAllChatsVisibleFilterId
+			: _filterId;
+		if (event.filterId != shownFilterId) {
 			return false;
 		} else if (const auto topic = event.key.topic()) {
 			return (topic->forum() == _openedForum);
@@ -3899,6 +3910,7 @@ void InnerWidget::updateSelectedRow(Key key) {
 }
 
 void InnerWidget::refreshShownList() {
+	_ayuAllChatsVisibleShown = ayuAllChatsVisibleWanted();
 	const auto list = _savedSublists
 		? _savedSublists->chatsList()->indexed()
 		: _openedForum
@@ -3907,6 +3919,9 @@ void InnerWidget::refreshShownList() {
 		? _openedCommunity->chatsList()->indexed()
 		: _filterId
 		? session().data().chatsFilters().chatsList(_filterId)->indexed()
+		: _ayuAllChatsVisibleShown
+		? session().data().chatsFilters().chatsList(
+			kAyuAllChatsVisibleFilterId)->indexed()
 		: session().data().chatsList(_openedFolder)->indexed();
 	if (_shownList != list) {
 		_shownList->unfreeze();
@@ -3914,6 +3929,28 @@ void InnerWidget::refreshShownList() {
 		_shownList->updateHeights(_narrowRatio);
 		_activeSubItemsRow = nullptr;
 	}
+}
+
+// AyuGram: "All chats" shows a virtual list without chats of the folders
+// marked "Don't show chats in All Chats".
+bool InnerWidget::ayuAllChatsVisibleWanted() const {
+	return !_savedSublists
+		&& !_openedForum
+		&& !_openedCommunity
+		&& !_filterId
+		&& !_openedFolder
+		&& session().data().chatsFilters().ayuHidesFromAllChats();
+}
+
+void InnerWidget::ayuApplyAllChatsVisibility() {
+	if (ayuAllChatsVisibleWanted() == _ayuAllChatsVisibleShown) {
+		return;
+	}
+	clearSelection();
+	stopReorderPinned();
+	refreshShownList();
+	refreshWithCollapsedRows(true);
+	refreshEmpty();
 }
 
 void InnerWidget::leaveEventHook(QEvent *e) {

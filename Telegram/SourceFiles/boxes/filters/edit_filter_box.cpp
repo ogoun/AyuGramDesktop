@@ -62,6 +62,10 @@ https://github.com/telegramdesktop/tdesktop/blob/master/LEGAL
 #include "styles/style_chat_helpers.h"
 #include "styles/style_info_userpic_builder.h"
 
+// AyuGram includes
+#include "ayu/ayu_settings.h"
+#include "ui/widgets/checkbox.h"
+
 namespace {
 
 using namespace Settings;
@@ -609,6 +613,25 @@ void EditFilterBox(
 			},
 		});
 
+	// AyuGram: hide chats of this folder from "All chats". A new folder gets
+	// its id only when saved, so the option is shown for existing ones.
+	const auto ayuUserId = session->userId().bare;
+	const auto ayuHideFromAll = filter.id()
+		? content->add(
+			object_ptr<Ui::Checkbox>(
+				content,
+				tr::ayu_HideFolderFromAllChats(tr::now),
+				AyuSettings::getInstance().isFolderHiddenFromAllChats(
+					ayuUserId,
+					filter.id()),
+				st::defaultBoxCheckbox),
+			style::margins(
+				st::windowFilterNameInputPadding.left(),
+				0,
+				st::windowFilterNameInputPadding.right(),
+				st::windowFilterNameInputPadding.bottom()))
+		: nullptr;
+
 	const auto nameEditing = box->lifetime().make_state<NameEditing>(
 		NameEditing{ name });
 
@@ -1124,6 +1147,12 @@ void EditFilterBox(
 
 	const auto save = [=] {
 		if (const auto result = collect()) {
+			if (ayuHideFromAll && result->id()) { // AyuGram
+				AyuSettings::getInstance().setFolderHiddenFromAllChats(
+					ayuUserId,
+					result->id(),
+					ayuHideFromAll->checked());
+			}
 			box->closeBox();
 			doneCallback(*result);
 		}

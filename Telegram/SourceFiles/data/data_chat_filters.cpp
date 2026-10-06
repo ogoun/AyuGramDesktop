@@ -418,6 +418,51 @@ ChatFilters::ChatFilters(not_null<Session*> owner)
 			}
 		}
 	}, _lifetime);
+
+	// AyuGram: folders hidden from "All chats".
+	rpl::merge(
+		_listChanged.events(),
+		AyuSettings::getInstance().foldersHiddenFromAllChatsChanges()
+	) | rpl::on_next([=] {
+		ayuRefreshHiddenFromAllChats();
+	}, _lifetime);
+}
+
+void ChatFilters::ayuRefreshHiddenFromAllChats() {
+	const auto &settings = AyuSettings::getInstance();
+	const auto userId = _owner->session().userId().bare;
+	auto hidden = std::vector<FilterId>();
+	for (const auto &filter : _list) {
+		const auto id = filter.id();
+		if (id && settings.isFolderHiddenFromAllChats(userId, id)) {
+			hidden.push_back(id);
+		}
+	}
+	if (hidden.empty() && _ayuHiddenFromAllChats.empty()) {
+		return;
+	}
+	// Rules of the hidden folders may have changed too, so refresh always.
+	_ayuHiddenFromAllChats = std::move(hidden);
+	_owner->ayuRefreshAllChatsVisible();
+	_ayuAllChatsVisibilityChanges.fire({});
+}
+
+bool ChatFilters::ayuHidesFromAllChats() const {
+	return !_ayuHiddenFromAllChats.empty();
+}
+
+bool ChatFilters::ayuHiddenFromAllChats(not_null<History*> history) const {
+	for (const auto id : _ayuHiddenFromAllChats) {
+		const auto i = ranges::find(_list, id, &ChatFilter::id);
+		if (i != end(_list) && i->contains(history)) {
+			return true;
+		}
+	}
+	return false;
+}
+
+rpl::producer<> ChatFilters::ayuAllChatsVisibilityChanges() const {
+	return _ayuAllChatsVisibilityChanges.events();
 }
 
 ChatFilters::~ChatFilters() = default;
@@ -441,6 +486,7 @@ not_null<Dialogs::MainList*> ChatFilters::chatsList(FilterId filterId) {
 void ChatFilters::clear() {
 	_chatsLists.clear();
 	_list.clear();
+	_ayuHiddenFromAllChats.clear(); // AyuGram
 }
 
 void ChatFilters::setPreloaded(
@@ -744,6 +790,12 @@ void ChatFilters::applyRemove(int position) {
 	auto filter = std::move(*i);
 	_list.erase(i);
 	applyChange(filter, ChatFilter(filter.id(), {}, {}, {}, {}, {}, {}, {}));
+
+	// AyuGram: a new folder may get the same id later.
+	AyuSettings::getInstance().setFolderHiddenFromAllChats(
+		_owner->session().userId().bare,
+		filter.id(),
+		false);
 }
 
 bool ChatFilters::applyChange(ChatFilter &filter, ChatFilter &&updated) {

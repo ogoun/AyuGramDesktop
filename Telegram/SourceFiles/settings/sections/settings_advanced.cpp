@@ -83,6 +83,9 @@ https://github.com/telegramdesktop/tdesktop/blob/master/LEGAL
 
 #include <ksandbox.h>
 
+// AyuGram includes
+#include "ayu/ayu_settings.h"
+
 namespace Settings {
 namespace {
 
@@ -1279,6 +1282,50 @@ void BuildExportSection(SectionBuilder &builder) {
 	});
 }
 
+// AyuGram: what kind of peers the global search asks the server for.
+void BuildPeerSearchSection(SectionBuilder &builder) {
+	builder.addDivider();
+	builder.addSkip();
+	builder.addSubsectionTitle({
+		.id = u"advanced/ayu_peer_search"_q,
+		.title = tr::ayu_PeerSearchHeader(),
+		.keywords = { u"search"_q, u"global"_q, u"bots"_q, u"channels"_q },
+	});
+
+	builder.add([](const WidgetContext &ctx) {
+		const auto container = ctx.container.get();
+		auto wrap = object_ptr<Ui::VerticalLayout>(container);
+		const auto inner = wrap.data();
+
+		auto &settings = AyuSettings::getInstance();
+		const auto group = std::make_shared<Ui::RadioenumGroup<PeerSearchMode>>(
+			settings.peerSearchMode());
+		const auto addRadio = [&](PeerSearchMode value, const QString &label) {
+			inner->add(
+				object_ptr<Ui::Radioenum<PeerSearchMode>>(
+					inner,
+					group,
+					value,
+					label,
+					st::settingsSendType),
+				st::settingsSendTypePadding);
+		};
+		addRadio(PeerSearchMode::All, tr::ayu_PeerSearchAll(tr::now));
+		addRadio(PeerSearchMode::Bots, tr::ayu_PeerSearchBots(tr::now));
+		addRadio(
+			PeerSearchMode::Channels,
+			tr::ayu_PeerSearchChannels(tr::now));
+
+		group->setChangedCallback([](PeerSearchMode value) {
+			AyuSettings::getInstance().setPeerSearchMode(value);
+		});
+
+		return SectionBuilder::WidgetToAdd{ .widget = std::move(wrap) };
+	});
+
+	builder.addSkip();
+}
+
 void BuildScreenReaderSection(SectionBuilder &builder) {
 	const auto detected = base::ScreenReaderState::Instance()->active();
 	const auto disabled = Ui::ScreenReaderModeDisabled();
@@ -1351,6 +1398,7 @@ const auto kMeta = BuildHelper({
 	BuildSystemIntegrationSection(builder);
 	BuildPerformanceSection(builder);
 	BuildSpellcheckerSection(builder);
+	BuildPeerSearchSection(builder); // AyuGram
 	BuildScreenReaderSection(builder);
 	if (autoUpdate) {
 		BuildUpdateSection(builder, false);

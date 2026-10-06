@@ -9191,3 +9191,8 @@ https://github.com/telegramdesktop/tdesktop/blob/master/LEGAL
 "ayu_AboutText1" = "ToS breaking Telegram client based on {api_link}.";
 "ayu_UpdateAyuGram" = "Update AyuGram";
 "ayu_UtilityRestartRequired" = "The app will close in 5 seconds.";
+"ayu_PeerSearchHeader" = "Search";
+"ayu_PeerSearchAll" = "Search all";
+"ayu_PeerSearchBots" = "Search bots";
+"ayu_PeerSearchChannels" = "Search channels";
+"ayu_HideFolderFromAllChats" = "Don't show chats in All Chats";

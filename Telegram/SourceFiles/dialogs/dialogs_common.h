@@ -23,6 +23,11 @@ namespace Dialogs {
 
 class Row;
 
+// AyuGram: id of the virtual "All chats" list without chats of the folders
+// marked "Don't show chats in All Chats". Sorted like the main list (pinned
+// chats on top), see Entry::sortKeyInChatList().
+inline constexpr auto kAyuAllChatsVisibleFilterId = int32(0x7FFFFF00);
+
 enum class SortMode {
 	Date    = 0x00,
 	Name    = 0x01,

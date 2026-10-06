@@ -11,6 +11,8 @@ namespace Main {
 class Session;
 } // namespace Main
 
+enum class PeerSearchMode; // AyuGram
+
 namespace Api {
 
 struct SponsoredSearchResult {
@@ -66,6 +68,7 @@ private:
 
     QString _query;
     Fn<void(PeerSearchResult)> _callback;
+	PeerSearchMode _mode = {}; // AyuGram: mode the cache was filled with.
 
 	base::flat_map<QString, CacheEntry> _cache;
 	base::flat_map<mtpRequestId, QString> _peerRequests;

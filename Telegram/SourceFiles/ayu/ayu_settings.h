@@ -10,9 +10,11 @@
 #include "ayu/libs/json_ext.hpp"
 #include "rpl/lifetime.h"
 #include "rpl/producer.h"
+#include "rpl/event_stream.h"
 #include "rpl/variable.h"
 
 #include <map>
+#include <set>
 #include <unordered_set>
 
 
@@ -51,6 +53,13 @@ enum class SendWithoutSoundOption {
 	Always = 2,
 };
 
+// AyuGram: which peers the global search (contacts.search) asks for.
+enum class PeerSearchMode {
+	All = 0,
+	Bots = 1,
+	Channels = 2,
+};
+
 NLOHMANN_JSON_SERIALIZE_ENUM(PeerIdDisplay, {
 	{PeerIdDisplay::Hidden, 0},
 	{PeerIdDisplay::TelegramApi, 1},
@@ -80,6 +89,12 @@ NLOHMANN_JSON_SERIALIZE_ENUM(SendWithoutSoundOption, {
 	{SendWithoutSoundOption::Never, 0},
 	{SendWithoutSoundOption::InGhostMode, 1},
 	{SendWithoutSoundOption::Always, 2},
+})
+
+NLOHMANN_JSON_SERIALIZE_ENUM(PeerSearchMode, {
+	{PeerSearchMode::All, "all"},
+	{PeerSearchMode::Bots, "bots"},
+	{PeerSearchMode::Channels, "channels"},
 })
 
 class GhostModeAccountSettings {
@@ -353,6 +368,15 @@ public:
 	[[nodiscard]] int avatarCorners() const { return _avatarCorners.current(); }
 	[[nodiscard]] bool singleCornerRadius() const { return _singleCornerRadius.current(); }
 	[[nodiscard]] bool streamerMode() const { return _streamerMode.current(); }
+	[[nodiscard]] PeerSearchMode peerSearchMode() const { return _peerSearchMode.current(); }
+
+	// AyuGram: folders whose chats are not shown in "All chats", per account.
+	[[nodiscard]] bool isFolderHiddenFromAllChats(uint64 userId, int filterId) const;
+	[[nodiscard]] std::set<int> foldersHiddenFromAllChats(uint64 userId) const;
+	void setFolderHiddenFromAllChats(uint64 userId, int filterId, bool hidden);
+	[[nodiscard]] rpl::producer<> foldersHiddenFromAllChatsChanges() const {
+		return _foldersHiddenFromAllChatsChanges.events();
+	}
 
 	void setSaveDeletedMessages(bool val);
 	void setSaveMessagesHistory(bool val);
@@ -440,6 +464,7 @@ public:
 	void setAvatarCorners(int val);
 	void setSingleCornerRadius(bool val);
 	void setStreamerMode(bool val);
+	void setPeerSearchMode(PeerSearchMode val);
 
 	[[nodiscard]] rpl::producer<bool> useGlobalGhostModeValue() const { return _useGlobalGhostMode.value(); }
 	[[nodiscard]] rpl::producer<bool> useGlobalGhostModeChanges() const { return _useGlobalGhostMode.changes(); }
@@ -615,6 +640,7 @@ public:
 	[[nodiscard]] rpl::producer<bool> singleCornerRadiusChanges() const { return _singleCornerRadius.changes(); }
 	[[nodiscard]] rpl::producer<bool> streamerModeValue() const { return _streamerMode.value(); }
 	[[nodiscard]] rpl::producer<bool> streamerModeChanges() const { return _streamerMode.changes(); }
+	[[nodiscard]] rpl::producer<PeerSearchMode> peerSearchModeValue() const { return _peerSearchMode.value(); }
 
 	friend void to_json(nlohmann::json &j, const AyuSettings &s);
 	friend void from_json(const nlohmann::json &j, AyuSettings &s);
@@ -711,6 +737,9 @@ private:
 	rpl::variable<int> _avatarCorners = 23;
 	rpl::variable<bool> _singleCornerRadius = false;
 	rpl::variable<bool> _streamerMode = false;
+	rpl::variable<PeerSearchMode> _peerSearchMode = PeerSearchMode::All;
+	std::map<uint64, std::set<int>> _foldersHiddenFromAllChats;
+	rpl::event_stream<> _foldersHiddenFromAllChatsChanges;
 
 	rpl::variable<bool> _useGlobalGhostMode = true;
 	std::map<uint64, std::unique_ptr<GhostModeAccountSettings>> _ghostAccounts;

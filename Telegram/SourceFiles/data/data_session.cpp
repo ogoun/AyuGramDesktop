@@ -5744,6 +5744,7 @@ void Session::refreshChatListEntry(Dialogs::Key key) {
 	if (event) {
 		_chatListEntryRefreshes.fire(std::move(event));
 	}
+	ayuRefreshAllChatsVisibleEntry(key); // AyuGram
 	if (!history) {
 		return;
 	}
@@ -5814,6 +5815,18 @@ void Session::removeChatListEntry(Dialogs::Key key) {
 	}
 	Assert(entry->folderKnown());
 
+	// AyuGram: the virtual "All chats" list.
+	if (entry->inChatList(Dialogs::kAyuAllChatsVisibleFilterId)) {
+		entry->removeFromChatList(
+			Dialogs::kAyuAllChatsVisibleFilterId,
+			chatsFilters().chatsList(Dialogs::kAyuAllChatsVisibleFilterId));
+		_chatListEntryRefreshes.fire(ChatListEntryRefresh{
+			.key = key,
+			.filterId = Dialogs::kAyuAllChatsVisibleFilterId,
+			.existenceChanged = true
+		});
+	}
+
 	for (const auto &filter : _chatsFilters->list()) {
 		const auto id = filter.id();
 		if (id && entry->inChatList(id)) {
@@ -5840,6 +5853,54 @@ void Session::removeChatListEntry(Dialogs::Key key) {
 		Core::App().notifications().clearFromTopic(topic);
 	} else if (const auto history = key.history()) {
 		Core::App().notifications().clearFromHistory(history);
+	}
+}
+
+// AyuGram: keeps the virtual "All chats" list (main list without chats of the
+// folders marked "Don't show chats in All Chats") in sync with the main list.
+void Session::ayuRefreshAllChatsVisibleEntry(Dialogs::Key key) {
+	constexpr auto id = Dialogs::kAyuAllChatsVisibleFilterId;
+	const auto entry = key.entry();
+	const auto history = entry->asHistory();
+	const auto should = _chatsFilters->ayuHidesFromAllChats()
+		&& entry->inChatList()
+		&& entry->folderKnown()
+		&& (chatsListFor(entry).get() == &_chatsList)
+		&& (entry->asFolder()
+			|| (history && !_chatsFilters->ayuHiddenFromAllChats(history)));
+	if (!should && !entry->inChatList(id)) {
+		return;
+	}
+	const auto list = chatsFilters().chatsList(id);
+	auto event = ChatListEntryRefresh{ .key = key, .filterId = id };
+	if (should) {
+		event.existenceChanged = !entry->inChatList(id);
+		if (event.existenceChanged) {
+			entry->addToChatList(id, list);
+		} else {
+			event.moved = entry->adjustByPosInChatList(id, list);
+		}
+	} else {
+		entry->removeFromChatList(id, list);
+		event.existenceChanged = true;
+	}
+	if (event) {
+		_chatListEntryRefreshes.fire(std::move(event));
+	}
+}
+
+void Session::ayuRefreshAllChatsVisible() {
+	constexpr auto id = Dialogs::kAyuAllChatsVisibleFilterId;
+	auto keys = std::vector<Dialogs::Key>();
+	const auto collect = [&](not_null<Dialogs::MainList*> list) {
+		for (const auto &row : list->indexed()->all()) {
+			keys.push_back(row->key());
+		}
+	};
+	collect(&_chatsList);
+	collect(chatsFilters().chatsList(id)); // Remove stale entries.
+	for (const auto &key : keys) {
+		ayuRefreshAllChatsVisibleEntry(key);
 	}
 }
 

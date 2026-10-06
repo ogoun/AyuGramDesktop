@@ -216,6 +216,12 @@ public:
 	[[nodiscard]] rpl::producer<bool> tagsEnabledChanges() const;
 	void requestToggleTags(bool value, Fn<void()> fail);
 
+	// AyuGram: folders marked "Don't show chats in All Chats".
+	[[nodiscard]] bool ayuHidesFromAllChats() const;
+	[[nodiscard]] bool ayuHiddenFromAllChats(
+		not_null<History*> history) const;
+	[[nodiscard]] rpl::producer<> ayuAllChatsVisibilityChanges() const;
+
 private:
 	struct MoreChatsData {
 		std::vector<not_null<PeerData*>> missing;
@@ -233,6 +239,8 @@ private:
 
 	void checkLoadMoreChatsLists();
 	void loadMoreChatsList(FilterId id);
+
+	void ayuRefreshHiddenFromAllChats();
 
 	const not_null<Session*> _owner;
 
@@ -265,6 +273,9 @@ private:
 	base::flat_map<FilterId, MoreChatsData> _moreChatsData;
 	rpl::event_stream<FilterId> _moreChatsUpdated;
 	base::Timer _moreChatsTimer;
+
+	std::vector<FilterId> _ayuHiddenFromAllChats;
+	rpl::event_stream<> _ayuAllChatsVisibilityChanges;
 
 	rpl::lifetime _lifetime;
 

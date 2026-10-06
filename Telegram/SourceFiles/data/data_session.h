@@ -951,6 +951,7 @@ public:
 	};
 	void refreshChatListEntry(Dialogs::Key key);
 	void removeChatListEntry(Dialogs::Key key);
+	void ayuRefreshAllChatsVisible(); // AyuGram
 	void refreshChatListUnreadOnTop();
 	[[nodiscard]] bool dialogsUnreadOnTop() const {
 		return _dialogsUnreadOnTop;
@@ -1042,6 +1043,8 @@ private:
 		crl::time received = 0;
 		mtpRequestId requestId = 0;
 	};
+
+	void ayuRefreshAllChatsVisibleEntry(Dialogs::Key key); // AyuGram
 
 	void suggestStartExport();
 
