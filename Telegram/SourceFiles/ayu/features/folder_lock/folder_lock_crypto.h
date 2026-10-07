@@ -50,14 +50,27 @@ struct CheckResult {
 };
 
 // Data of the real slot (0): the key of the decoy slot (1) if a second
-// bottom is set up, and the list of allowed chats.
+// bottom is set up, the list of allowed chats and the private key of the
+// local encryption of the folder chats (sub-project 3).
 struct SecretData {
 	QByteArray decoyKey;
 	std::vector<uint64_t> allowed;
+	QByteArray folderKey;
 };
 
-// Fits into one slot together with SecretData header and the decoy key.
-inline constexpr auto kMaxAllowed = (kMaxDataSize - 2 - kKeySize - 3) / 8;
+// Sealed boxes of the local encryption: X25519 keys.
+inline constexpr auto kBoxKeySize = 32;
+inline constexpr auto kKeyTagSize = 8;
+inline constexpr auto kBoxPadding = 256;
+
+struct KeyPair {
+	QByteArray publicKey;
+	QByteArray privateKey;
+};
+
+// Fits into one slot together with SecretData header and the two keys.
+inline constexpr auto kMaxAllowed
+	= (kMaxDataSize - 3 - kKeySize - kBoxKeySize - 3) / 8;
 
 [[nodiscard]] QByteArray RandomBytes(int size);
 [[nodiscard]] QByteArray MakeAad(int filterId);
@@ -87,6 +100,19 @@ inline constexpr auto kMaxAllowed = (kMaxDataSize - 2 - kKeySize - 3) / 8;
 [[nodiscard]] QByteArray SerializeSecret(const SecretData &data);
 // Empty data (records of sub-project 1) is a SecretData without a decoy.
 [[nodiscard]] std::optional<SecretData> ParseSecret(const QByteArray &data);
+// Local encryption: anyone with the public key seals, only the private key
+// (kept in the real slot) opens. Each box has its own ephemeral key, the
+// data length is padded to kBoxPadding.
+[[nodiscard]] KeyPair GenerateKeyPair();
+[[nodiscard]] QByteArray PublicKeyOf(const QByteArray &privateKey);
+[[nodiscard]] QByteArray SealBox(
+	const QByteArray &publicKey,
+	const QByteArray &data);
+[[nodiscard]] std::optional<QByteArray> OpenBox(
+	const QByteArray &privateKey,
+	const QByteArray &box);
+// Short id of a public key, marks the boxes of one folder.
+[[nodiscard]] QByteArray KeyTag(const QByteArray &publicKey);
 // Seconds to wait after `badTries` wrong PINs in a row.
 [[nodiscard]] int RetryDelaySeconds(int badTries);
 // Best effort: zeroes the buffer if `data` is its only owner (other

@@ -1,0 +1,2 @@
+// stub
+#pragma once

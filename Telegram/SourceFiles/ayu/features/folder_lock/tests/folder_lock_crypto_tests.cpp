@@ -9,7 +9,15 @@
 #include "ayu/features/folder_lock/folder_lock_crypto.h"
 #include "ayu/features/folder_lock/folder_lock_merge.h"
 
+#include <QtCore/QJsonObject>
 #include <QtCore/QString>
+
+#include <memory>
+#include <optional>
+#include <string>
+#include <vector>
+
+#include "ayu/features/folder_lock/folder_vault_codec.h"
 
 #include <cstdio>
 
@@ -213,6 +221,156 @@ void TestMerge() {
 	AYU_CHECK(!kept.always.contains(30));
 }
 
+void TestSecretWithFolderKey() {
+	// A secret written by sub-project 2 (version 1) still parses.
+	const auto old = SecretData{
+		.decoyKey = QByteArray(kKeySize, 'd'),
+		.allowed = { 3 },
+	};
+	auto v1 = QByteArray();
+	v1.append(char(1));
+	v1.append(char(kKeySize));
+	v1.append(old.decoyKey);
+	v1.append(SerializeAllowed(old.allowed));
+	const auto parsedOld = ParseSecret(v1);
+	AYU_CHECK(parsedOld && parsedOld->decoyKey == old.decoyKey);
+	AYU_CHECK(parsedOld && parsedOld->folderKey.isEmpty());
+	AYU_CHECK(parsedOld && parsedOld->allowed == old.allowed);
+
+	const auto secret = SecretData{
+		.decoyKey = QByteArray(kKeySize, 'd'),
+		.allowed = { 7, 8 },
+		.folderKey = QByteArray(kKeySize, 'f'),
+	};
+	const auto parsed = ParseSecret(SerializeSecret(secret));
+	AYU_CHECK(parsed && parsed->folderKey == secret.folderKey);
+	AYU_CHECK(parsed && parsed->decoyKey == secret.decoyKey);
+	AYU_CHECK(parsed && parsed->allowed == secret.allowed);
+	auto bad = SerializeSecret(secret);
+	bad.chop(1);
+	AYU_CHECK(!ParseSecret(bad));
+
+	// The biggest secret still fits into one slot.
+	auto many = secret;
+	many.allowed.clear();
+	for (auto i = 0; i != kMaxAllowed; ++i) {
+		many.allowed.push_back(uint64_t(i + 1));
+	}
+	const auto slot = SealSlot(RandomBytes(kKeySize), MakeAad(1), SlotContent{
+		.data = SerializeSecret(many),
+	});
+	AYU_CHECK(slot.size() == kSlotSize);
+}
+
+void TestSealedBox() {
+	const auto pair = GenerateKeyPair();
+	AYU_CHECK(pair.publicKey.size() == kBoxKeySize);
+	AYU_CHECK(pair.privateKey.size() == kBoxKeySize);
+	AYU_CHECK(PublicKeyOf(pair.privateKey) == pair.publicKey);
+	const auto other = GenerateKeyPair();
+	AYU_CHECK(other.publicKey != pair.publicKey);
+
+	const auto data = QByteArray("deleted message text");
+	const auto box = SealBox(pair.publicKey, data);
+	AYU_CHECK(!box.isEmpty());
+	AYU_CHECK(!box.contains(data));
+	const auto opened = OpenBox(pair.privateKey, box);
+	AYU_CHECK(opened && *opened == data);
+	AYU_CHECK(!OpenBox(other.privateKey, box));
+	auto tampered = box;
+	tampered[tampered.size() / 2] = char(tampered[tampered.size() / 2] ^ 1);
+	AYU_CHECK(!OpenBox(pair.privateKey, tampered));
+	AYU_CHECK(!OpenBox(pair.privateKey, box.left(box.size() - 1)));
+	AYU_CHECK(!OpenBox(pair.privateKey, QByteArray()));
+
+	// Each box has its own ephemeral key, the length is padded.
+	const auto again = SealBox(pair.publicKey, data);
+	AYU_CHECK(again != box);
+	AYU_CHECK(again.size() == box.size());
+	const auto longer = SealBox(pair.publicKey, QByteArray(100, 'x'));
+	AYU_CHECK(longer.size() == box.size());
+	const auto big = SealBox(pair.publicKey, QByteArray(300, 'x'));
+	AYU_CHECK(big.size() == box.size() + 256);
+	const auto empty = SealBox(pair.publicKey, QByteArray());
+	const auto emptyOpened = OpenBox(pair.privateKey, empty);
+	AYU_CHECK(emptyOpened && emptyOpened->isEmpty());
+
+	AYU_CHECK(SealBox(QByteArray(5, 'x'), data).isEmpty());
+	AYU_CHECK(KeyTag(pair.publicKey).size() == kKeyTagSize);
+	AYU_CHECK(KeyTag(pair.publicKey) == KeyTag(pair.publicKey));
+	AYU_CHECK(KeyTag(pair.publicKey) != KeyTag(other.publicKey));
+}
+
+void TestVaultCodec() {
+	using namespace Ayu::FolderVaultCodec;
+	auto message = AyuMessageBase();
+	message.fakeId = 5;
+	message.userId = 100;
+	message.dialogId = -1001234567890LL;
+	message.groupedId = 0;
+	message.peerId = 77;
+	message.fromId = 88;
+	message.topicId = 3;
+	message.messageId = 4242;
+	message.date = 1700000000;
+	message.flags = 9;
+	message.editDate = 1700000100;
+	message.views = 12;
+	message.fwdFlags = 0;
+	message.fwdFromId = 0;
+	message.fwdName = "fwd";
+	message.fwdDate = 0;
+	message.fwdPostAuthor = "";
+	message.postAuthor = "author";
+	message.replyFlags = 1;
+	message.replyMessageId = 41;
+	message.replyPeerId = 77;
+	message.replyTopId = 0;
+	message.replyForumTopic = true;
+	message.replySerialized = { 'a', 'b' };
+	message.replyMarkupSerialized = {};
+	message.entityCreateDate = 1700000200;
+	message.text = "Привет, мир";
+	message.textEntities = { 1, 2, 3 };
+	message.mediaPath = "/";
+	message.hqThumbPath = "";
+	message.documentType = 0;
+	message.documentSerialized = {};
+	message.thumbsSerialized = { 9 };
+	message.documentAttributesSerialized = {};
+	message.mimeType = "text/plain";
+
+	const auto data = SerializeRecord({ .kind = Kind::Edited, .message = message });
+	const auto parsed = ParseRecord(data);
+	AYU_CHECK(parsed.has_value());
+	if (parsed) {
+		const auto &m = parsed->message;
+		AYU_CHECK(parsed->kind == Kind::Edited);
+		AYU_CHECK(m.userId == 100 && m.dialogId == message.dialogId);
+		AYU_CHECK(m.peerId == 77 && m.fromId == 88 && m.topicId == 3);
+		AYU_CHECK(m.messageId == 4242 && m.date == message.date);
+		AYU_CHECK(m.flags == 9 && m.editDate == message.editDate);
+		AYU_CHECK(m.views == 12 && m.fwdName == "fwd");
+		AYU_CHECK(m.postAuthor == "author" && m.replyFlags == 1);
+		AYU_CHECK(m.replyMessageId == 41 && m.replyPeerId == 77);
+		AYU_CHECK(m.replyForumTopic);
+		AYU_CHECK(m.replySerialized == message.replySerialized);
+		AYU_CHECK(m.entityCreateDate == message.entityCreateDate);
+		AYU_CHECK(m.text == message.text);
+		AYU_CHECK(m.textEntities == message.textEntities);
+		AYU_CHECK(m.mediaPath == "/" && m.thumbsSerialized == message.thumbsSerialized);
+		AYU_CHECK(m.mimeType == "text/plain");
+	}
+	AYU_CHECK(!ParseRecord(QByteArray()));
+	AYU_CHECK(!ParseRecord(data.left(data.size() / 2)));
+	auto badKind = data;
+	badKind[1] = char(9);
+	AYU_CHECK(!ParseRecord(badKind));
+	auto badVersion = data;
+	badVersion[0] = char(7);
+	AYU_CHECK(!ParseRecord(badVersion));
+}
+
 void TestWipe() {
 	auto data = QByteArray("sensitive");
 	Wipe(data);
@@ -231,6 +389,9 @@ int main() {
 	TestSecretSerialization();
 	TestCheckPinKeyAndEmptyPin();
 	TestMerge();
+	TestSecretWithFolderKey();
+	TestSealedBox();
+	TestVaultCodec();
 	TestWipe();
 	if (Failed) {
 		std::printf("FAILED: %d\n", Failed);

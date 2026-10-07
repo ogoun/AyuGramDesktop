@@ -13,6 +13,8 @@ PRIVATE
     ayu/features/folder_lock/folder_lock_crypto.h
     ayu/features/folder_lock/folder_lock_merge.cpp
     ayu/features/folder_lock/folder_lock_merge.h
+    ayu/features/folder_lock/folder_vault_codec.cpp
+    ayu/features/folder_lock/folder_vault_codec.h
     ayu/features/folder_lock/tests/folder_lock_crypto_tests.cpp
 )
 
