@@ -245,14 +245,81 @@ CheckResult CheckPin(
 			result.failed = true;
 		}
 		auto opened = OpenSlot(key, aad, slots[i]);
-		Wipe(key);
 		if (opened && !result.ok) {
 			result.ok = true;
 			result.slot = i;
 			result.content = std::move(*opened);
+			result.key = key;
+		}
+		Wipe(key);
+	}
+	return result;
+}
+
+QByteArray SerializeAllowed(const std::vector<uint64_t> &ids) {
+	auto result = QByteArray();
+	result.reserve(3 + 8 * int(ids.size()));
+	result.append(char(1));
+	result.append(char((ids.size() >> 8) & 0xFF));
+	result.append(char(ids.size() & 0xFF));
+	for (const auto id : ids) {
+		for (auto i = 0; i != 8; ++i) {
+			result.append(char((id >> (8 * i)) & 0xFF));
 		}
 	}
 	return result;
+}
+
+std::optional<std::vector<uint64_t>> ParseAllowed(const QByteArray &data) {
+	if (data.isEmpty()) {
+		return std::vector<uint64_t>();
+	} else if (data.size() < 3 || data[0] != char(1)) {
+		return std::nullopt;
+	}
+	const auto count = (int(uchar(data[1])) << 8) | int(uchar(data[2]));
+	if (data.size() != 3 + 8 * count) {
+		return std::nullopt;
+	}
+	auto result = std::vector<uint64_t>();
+	result.reserve(count);
+	for (auto k = 0; k != count; ++k) {
+		auto id = uint64_t();
+		for (auto i = 0; i != 8; ++i) {
+			id |= uint64_t(uchar(data[3 + 8 * k + i])) << (8 * i);
+		}
+		result.push_back(id);
+	}
+	return result;
+}
+
+QByteArray SerializeSecret(const SecretData &data) {
+	auto result = QByteArray();
+	result.append(char(1));
+	result.append(char(data.decoyKey.size()));
+	result.append(data.decoyKey);
+	result.append(SerializeAllowed(data.allowed));
+	return result;
+}
+
+std::optional<SecretData> ParseSecret(const QByteArray &data) {
+	if (data.isEmpty()) {
+		return SecretData(); // Records of sub-project 1: no second bottom.
+	} else if (data.size() < 2 || data[0] != char(1)) {
+		return std::nullopt;
+	}
+	const auto keyLength = int(uchar(data[1]));
+	if ((keyLength != 0 && keyLength != kKeySize)
+		|| data.size() < 2 + keyLength) {
+		return std::nullopt;
+	}
+	auto allowed = ParseAllowed(data.mid(2 + keyLength));
+	if (!allowed) {
+		return std::nullopt;
+	}
+	return SecretData{
+		.decoyKey = data.mid(2, keyLength),
+		.allowed = std::move(*allowed),
+	};
 }
 
 int RetryDelaySeconds(int badTries) {

@@ -7,6 +7,7 @@
 //
 // Unit tests of the folder lock crypto core (target test_ayu_folder_lock).
 #include "ayu/features/folder_lock/folder_lock_crypto.h"
+#include "ayu/features/folder_lock/folder_lock_merge.h"
 
 #include <QtCore/QString>
 
@@ -130,6 +131,80 @@ void TestKdfFailure() {
 	AYU_CHECK(!wrong.ok && !wrong.failed);
 }
 
+void TestAllowedSerialization() {
+	const auto ids = std::vector<uint64_t>{ 1, 0xFFFFFFFFFFULL, 42 };
+	const auto data = SerializeAllowed(ids);
+	AYU_CHECK(data.size() == 1 + 2 + 8 * 3);
+	const auto parsed = ParseAllowed(data);
+	AYU_CHECK(parsed && *parsed == ids);
+	AYU_CHECK(ParseAllowed(QByteArray()) && ParseAllowed(QByteArray())->empty());
+	AYU_CHECK(!ParseAllowed(data.left(data.size() - 1)));
+	auto bad = data;
+	if (!bad.isEmpty()) {
+		bad[0] = char(9);
+	}
+	AYU_CHECK(!ParseAllowed(bad));
+}
+
+void TestSecretSerialization() {
+	const auto empty = ParseSecret(QByteArray());
+	AYU_CHECK(empty && empty->decoyKey.isEmpty() && empty->allowed.empty());
+	const auto secret = SecretData{
+		.decoyKey = QByteArray(kKeySize, 'k'),
+		.allowed = { 5, 6 },
+	};
+	const auto parsed = ParseSecret(SerializeSecret(secret));
+	AYU_CHECK(parsed && parsed->decoyKey == secret.decoyKey);
+	AYU_CHECK(parsed && parsed->allowed == secret.allowed);
+	auto many = SecretData{ .decoyKey = QByteArray(kKeySize, 'k') };
+	for (auto i = 0; i != kMaxAllowed; ++i) {
+		many.allowed.push_back(uint64_t(i + 1));
+	}
+	const auto key = RandomBytes(kKeySize);
+	const auto slot = SealSlot(key, MakeAad(1), SlotContent{
+		.data = SerializeSecret(many),
+	});
+	AYU_CHECK(slot.size() == kSlotSize);
+}
+
+void TestCheckPinKeyAndEmptyPin() {
+	const auto salt = RandomBytes(kSaltSize);
+	const auto emptyKey = DeriveKey(QByteArray(), salt, 1, kFast);
+	AYU_CHECK(emptyKey.size() == kKeySize);
+	const auto slots = std::array<QByteArray, 2>{
+		RandomBytes(kSlotSize),
+		SealSlot(emptyKey, MakeAad(3), SlotContent{
+			.role = Role::Decoy,
+			.data = SerializeAllowed({ 7 }),
+		}),
+	};
+	const auto result = CheckPin(QByteArray(), salt, kFast, 3, slots);
+	AYU_CHECK(result.ok && result.slot == 1 && result.key == emptyKey);
+	AYU_CHECK(!CheckPin("real-pin", salt, kFast, 3, slots).ok);
+}
+
+void TestMerge() {
+	using namespace Ayu::FolderLockMerge;
+	const auto real = Real{
+		.always = { 1, 2, 3, 10 }, // 10 is hidden.
+		.never = { 20 },
+		.pinned = { 2, 10 }, // 10 is a hidden pinned chat.
+	};
+	// The decoy view showed allowed {1, 2, 4}, 4 is in the folder by type.
+	// The user removed 2 and 4, added 5.
+	const auto edit = Edit{
+		.allowedOld = { 1, 2, 4 },
+		.shownAlways = { 1, 5 },
+		.shownNever = {},
+		.typeMatched = { 4 },
+	};
+	const auto result = MergeDecoyEdit(real, edit);
+	AYU_CHECK((result.always == std::set<uint64_t>{ 1, 3, 5, 10 }));
+	AYU_CHECK((result.never == std::set<uint64_t>{ 4, 20 }));
+	AYU_CHECK((result.pinned == std::vector<uint64_t>{ 10 }));
+	AYU_CHECK((result.allowed == std::set<uint64_t>{ 1, 5 }));
+}
+
 void TestWipe() {
 	auto data = QByteArray("sensitive");
 	Wipe(data);
@@ -144,6 +219,10 @@ int main() {
 	TestCheckPin();
 	TestRetryDelay();
 	TestKdfFailure();
+	TestAllowedSerialization();
+	TestSecretSerialization();
+	TestCheckPinKeyAndEmptyPin();
+	TestMerge();
 	TestWipe();
 	if (Failed) {
 		std::printf("FAILED: %d\n", Failed);

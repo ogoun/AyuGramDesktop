@@ -11,6 +11,7 @@
 #include <array>
 #include <cstdint>
 #include <optional>
+#include <vector>
 
 namespace Ayu::FolderLockCrypto {
 
@@ -45,7 +46,18 @@ struct CheckResult {
 	bool failed = false; // Key derivation failed (broken record), not a PIN.
 	int slot = -1;
 	SlotContent content;
+	QByteArray key; // Key of the matched slot (to re-seal it later).
 };
+
+// Data of the real slot (0): the key of the decoy slot (1) if a second
+// bottom is set up, and the list of allowed chats.
+struct SecretData {
+	QByteArray decoyKey;
+	std::vector<uint64_t> allowed;
+};
+
+// Fits into one slot together with SecretData header and the decoy key.
+inline constexpr auto kMaxAllowed = (kMaxDataSize - 2 - kKeySize - 3) / 8;
 
 [[nodiscard]] QByteArray RandomBytes(int size);
 [[nodiscard]] QByteArray MakeAad(int filterId);
@@ -69,6 +81,12 @@ struct CheckResult {
 	const KdfParams &params,
 	int filterId,
 	const std::array<QByteArray, 2> &slots);
+[[nodiscard]] QByteArray SerializeAllowed(const std::vector<uint64_t> &ids);
+[[nodiscard]] std::optional<std::vector<uint64_t>> ParseAllowed(
+	const QByteArray &data);
+[[nodiscard]] QByteArray SerializeSecret(const SecretData &data);
+// Empty data (records of sub-project 1) is a SecretData without a decoy.
+[[nodiscard]] std::optional<SecretData> ParseSecret(const QByteArray &data);
 // Seconds to wait after `badTries` wrong PINs in a row.
 [[nodiscard]] int RetryDelaySeconds(int badTries);
 // Best effort: zeroes the buffer if `data` is its only owner (other
