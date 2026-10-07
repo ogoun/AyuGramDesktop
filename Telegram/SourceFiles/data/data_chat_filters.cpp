@@ -846,6 +846,8 @@ void ChatFilters::applyRemove(int position) {
 		_owner->session().userId().bare,
 		filter.id(),
 		false);
+	// The encrypted records of the folder can't be opened anymore.
+	folderLock().forgetFolder(filter.id());
 	AyuSettings::getInstance().setFolderProtection(
 		_owner->session().userId().bare,
 		filter.id(),

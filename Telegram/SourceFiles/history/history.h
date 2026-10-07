@@ -8,6 +8,7 @@ https://github.com/telegramdesktop/tdesktop/blob/master/LEGAL
 #pragma once
 
 #include "data/data_types.h"
+#include "ayu/features/folder_lock/folder_seal.h" // AyuGram
 #include "data/data_peer.h"
 #include "data/data_drafts.h"
 #include "data/data_thread.h"
@@ -131,6 +132,8 @@ public:
 
 	template <typename ...Args>
 	not_null<HistoryItem*> makeMessage(MsgId id, Args &&...args) {
+		// AyuGram: media of encrypted folder chats is not cached.
+		const auto ayuSealed = Ayu::SealedScope(Ayu::IsSealedHistory(this));
 		return static_cast<HistoryItem*>(
 			insertItem(
 				std::make_unique<HistoryItem>(
@@ -142,6 +145,7 @@ public:
 	not_null<HistoryItem*> makeMessage(
 			HistoryItemCommonFields &&fields,
 			Args &&...args) {
+		const auto ayuSealed = Ayu::SealedScope(Ayu::IsSealedHistory(this));
 		return static_cast<HistoryItem*>(
 			insertItem(
 				std::make_unique<HistoryItem>(

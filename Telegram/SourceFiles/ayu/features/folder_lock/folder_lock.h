@@ -123,6 +123,8 @@ public:
 	// Local encryption of the folder chats (with the real PIN settings).
 	[[nodiscard]] bool isEncrypted(FilterId id) const;
 	bool setEncrypted(FilterId id, bool enabled);
+	// The folder is removed: its encrypted records are destroyed.
+	void forgetFolder(FilterId id);
 	// Data of the chat must not be written plain on the disk.
 	[[nodiscard]] bool isSealed(not_null<History*> history) const;
 	[[nodiscard]] bool isSealed(not_null<PeerData*> peer) const;

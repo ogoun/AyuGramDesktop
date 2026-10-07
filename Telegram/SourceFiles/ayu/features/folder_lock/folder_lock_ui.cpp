@@ -755,7 +755,9 @@ void AddFolderProtectionSection(
 					// Looks like the PIN is gone, the hidden part stays.
 					lock->imitateRemove(id, [=](bool) { refresh(); });
 				} else {
-					lock->removeRealPin(id);
+					if (!lock->removeRealPin(id)) {
+						controller->showToast(failText);
+					}
 					refresh();
 				}
 			},

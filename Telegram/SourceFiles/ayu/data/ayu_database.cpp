@@ -442,7 +442,10 @@ void OverwriteAll(std::vector<Message> &messages) {
 	for (auto &message : messages) {
 		Overwrite(message.text);
 		Overwrite(message.fwdName);
+		Overwrite(message.fwdPostAuthor);
 		Overwrite(message.postAuthor);
+		std::fill(message.textEntities.begin(), message.textEntities.end(), '\0');
+		std::fill(message.replySerialized.begin(), message.replySerialized.end(), '\0');
 	}
 	messages.clear();
 }
@@ -586,7 +589,7 @@ int sealPlainMessages(
 	return int(sealed.size());
 }
 
-void unsealMessages(
+bool unsealMessages(
 		ID userId,
 		const std::vector<char> &keyTag,
 		const std::vector<UnsealedMessage> &messages) {
@@ -613,6 +616,34 @@ void unsealMessages(
 		} catch (...) {
 		}
 		LOG(("Failed to move sealed messages to plain: %1").arg(ex.what()));
+		return false;
+	}
+	return true;
+}
+
+void removeSealedExcept(ID userId, const std::vector<std::vector<char>> &keep) {
+	std::lock_guard lock(databaseMutex);
+	try {
+		const auto rows = storage.select(
+			columns(
+				column<SealedMessage>(&SealedMessage::fakeId),
+				column<SealedMessage>(&SealedMessage::keyTag)),
+			where(column<SealedMessage>(&SealedMessage::userId) == userId)
+		);
+		auto remove = std::vector<ID>();
+		for (const auto &[fakeId, keyTag] : rows) {
+			if (std::find(keep.begin(), keep.end(), keyTag) == keep.end()) {
+				remove.push_back(fakeId);
+			}
+		}
+		if (!remove.empty()) {
+			storage.remove_all<SealedMessage>(
+				where(in(&SealedMessage::fakeId, remove))
+			);
+			LOG(("Removed %1 sealed records of deleted folders.").arg(remove.size()));
+		}
+	} catch (std::exception &ex) {
+		LOG(("Failed to remove sealed records of deleted folders: %1").arg(ex.what()));
 	}
 }
 

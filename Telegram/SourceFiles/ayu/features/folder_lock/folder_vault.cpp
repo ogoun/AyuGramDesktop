@@ -6,6 +6,7 @@
 // Copyright @Radolyn, 2026
 #include "ayu/features/folder_lock/folder_vault.h"
 
+#include "ayu/ayu_settings.h"
 #include "ayu/data/ayu_database.h"
 #include "ayu/features/folder_lock/folder_lock.h"
 #include "ayu/features/folder_lock/folder_lock_crypto.h"
@@ -436,13 +437,26 @@ bool FolderVault::unseal(FilterId id, const QByteArray &privateKey) {
 			});
 		}
 	}
-	AyuDatabase::unsealMessages(userId(), tag, messages);
+	const auto ok = AyuDatabase::unsealMessages(userId(), tag, messages);
 	for (auto &message : messages) {
 		auto record = Record{ .message = std::move(message.message) };
 		WipeRecord(record);
 	}
 	forget(id);
-	return true;
+	return ok;
+}
+
+void FolderVault::collectGarbage() {
+	auto &settings = AyuSettings::getInstance();
+	const auto user = _session->userId().bare;
+	auto keep = std::vector<std::vector<char>>();
+	for (const auto id : settings.folderProtectionIds(user)) {
+		const auto record = settings.folderProtection(user, id);
+		if (record && !record->publicKey.isEmpty()) {
+			keep.push_back(Tag(record->publicKey));
+		}
+	}
+	AyuDatabase::removeSealedExcept(userId(), keep);
 }
 
 void FolderVault::destroy(const QByteArray &publicKey) {

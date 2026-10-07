@@ -310,6 +310,9 @@ FullMsgId Uploader::currentUploadId() const {
 void Uploader::upload(
 		FullMsgId itemId,
 		const std::shared_ptr<FilePrepareResult> &file) {
+	// AyuGram: the message is not created yet, the chat tells.
+	const auto ayuSealed = Ayu::SealedScope(file->to.peer
+		&& Ayu::IsSealedPeer(session().data().peer(file->to.peer)));
 	auto preparing = false;
 	if (file->type == SendMediaType::Photo) {
 		const auto photo = session().data().processPhoto(

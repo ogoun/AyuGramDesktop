@@ -50,10 +50,12 @@ int sealPlainMessages(
 	const std::vector<char> &keyTag,
 	const std::function<std::vector<char>(int kind, const AyuMessageBase &message)> &seal);
 // Opened records become plain ones, all records of the tag are removed.
-void unsealMessages(
+bool unsealMessages(
 	ID userId,
 	const std::vector<char> &keyTag,
 	const std::vector<UnsealedMessage> &messages);
+// Removes the records of the user with tags not in `keep` (deleted folders).
+void removeSealedExcept(ID userId, const std::vector<std::vector<char>> &keep);
 
 std::vector<RegexFilter> getAllRegexFilters();
 RegexFilter getById(std::vector<char> id);

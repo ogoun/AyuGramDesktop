@@ -100,6 +100,9 @@ FolderLock::FolderLock(not_null<Main::Session*> session)
 	}, _lifetime);
 	crl::on_main(this, [=] {
 		_vault->sweepAll();
+		if (!_awaitingRules) {
+			_vault->collectGarbage();
+		}
 	});
 }
 
@@ -160,6 +163,7 @@ void FolderLock::refreshProtected(bool notify) {
 		crl::on_main(this, [=] {
 			_vault->flushPending();
 			_vault->sweepAll();
+			_vault->collectGarbage();
 		});
 	}
 	for (auto i = begin(_unlocked); i != end(_unlocked);) {
@@ -379,6 +383,7 @@ void FolderLock::tryUnlock(
 			auto unlocked = Unlocked{ .slot = checked.slot };
 			if (checked.slot == 0) {
 				auto secret = ParseSecret(checked.content.data);
+				Wipe(checked.content.data);
 				if (secret) {
 					unlocked.folderKey = SecretBytes(
 						std::move(secret->folderKey));
@@ -531,10 +536,12 @@ std::optional<QByteArray> FolderLock::sealSecret(FilterId id) const {
 	if (i == end(_access) || i->second.mode != AccessMode::Real) {
 		return std::nullopt;
 	}
+	auto data = SerializeSecret(i->second.secret);
 	auto slot = SealSlot(i->second.key, MakeAad(id), SlotContent{
 		.role = Role::Full,
-		.data = SerializeSecret(i->second.secret),
+		.data = data,
 	});
+	Wipe(data);
 	if (slot.size() != kSlotSize) {
 		return std::nullopt;
 	}
@@ -619,6 +626,7 @@ void FolderLock::wipeAccess(FilterId id) {
 	if (i != end(_access)) {
 		Wipe(i->second.key);
 		Wipe(i->second.secret.decoyKey);
+		Wipe(i->second.secret.folderKey);
 		_access.erase(i);
 	}
 }
@@ -647,6 +655,7 @@ void FolderLock::beginSettings(
 			access.mode = AccessMode::Real;
 			access.secret = ParseSecret(checked.content.data).value_or(
 				SecretData());
+			Wipe(checked.content.data);
 		} else {
 			access.mode = AccessMode::Decoy;
 			access.allowed = ParseAllowed(checked.content.data).value_or(
@@ -1035,7 +1044,6 @@ void FolderLock::changeRealPin(
 	const auto weak = base::make_weak(this);
 	const auto salt = record->salt;
 	const auto params = ParamsOf(*record);
-	const auto secret = SerializeSecret(i->second.secret);
 	const auto slot1 = record->slots[1];
 	crl::async([=, pin = std::move(newPin)]() mutable {
 		auto decoyKey = DeriveKey(pin, salt, 1, params);
@@ -1049,17 +1057,23 @@ void FolderLock::changeRealPin(
 		// The salt stays, so the second slot keeps working.
 		auto key = DeriveKey(pin, salt, 0, params);
 		Wipe(pin);
-		auto slot = key.isEmpty()
-			? QByteArray()
-			: SealSlot(key, MakeAad(id), SlotContent{
-				.role = Role::Full,
-				.data = secret,
-			});
 		crl::on_main(weak, [=]() mutable {
 			const auto i = _access.find(id);
-			if (slot.size() != kSlotSize
+			if (key.isEmpty()
 				|| i == end(_access)
 				|| i->second.mode != AccessMode::Real) {
+				Wipe(key);
+				done(false, false);
+				return;
+			}
+			// The secret may change while the KDF runs (encryption).
+			auto data = SerializeSecret(i->second.secret);
+			auto slot = SealSlot(key, MakeAad(id), SlotContent{
+				.role = Role::Full,
+				.data = data,
+			});
+			Wipe(data);
+			if (slot.size() != kSlotSize) {
 				Wipe(key);
 				done(false, false);
 				return;
@@ -1081,8 +1095,10 @@ bool FolderLock::removeRealPin(FilterId id) {
 	// become plain again.
 	if (isEncrypted(id)) {
 		const auto &key = i->second.secret.folderKey;
-		if (key.isEmpty() || !_vault->unseal(id, key)) {
-			_vault->destroy(publicKey(id));
+		if (key.isEmpty()) {
+			_vault->destroy(publicKey(id)); // Nobody can open them anyway.
+		} else if (!_vault->unseal(id, key)) {
+			return false; // Keep the PIN and the records.
 		}
 	}
 	wipeAccess(id);
@@ -1230,7 +1246,9 @@ bool FolderLock::setEncrypted(FilterId id, bool enabled) {
 			return false;
 		}
 		Wipe(secret.folderKey);
-		secret.folderKey = pair.privateKey;
+		secret.folderKey = QByteArray(
+			pair.privateKey.constData(),
+			pair.privateKey.size());
 		auto slot0 = sealSecret(id);
 		if (!slot0) {
 			Wipe(secret.folderKey);
@@ -1242,7 +1260,9 @@ bool FolderLock::setEncrypted(FilterId id, bool enabled) {
 		settings.setFolderProtection(userId(), id, std::move(record));
 		const auto u = _unlocked.find(id);
 		if (u != end(_unlocked) && u->second.slot == 0) {
-			u->second.folderKey = SecretBytes(pair.privateKey);
+			u->second.folderKey = SecretBytes(QByteArray(
+				pair.privateKey.constData(),
+				pair.privateKey.size()));
 		}
 		Wipe(pair.privateKey);
 		_vault->sweep(id);
@@ -1255,11 +1275,14 @@ bool FolderLock::setEncrypted(FilterId id, bool enabled) {
 			return false;
 		}
 		const auto oldPublicKey = record->publicKey;
-		Wipe(secret.folderKey);
+		auto keptKey = std::move(secret.folderKey);
+		secret.folderKey = QByteArray();
 		auto slot0 = sealSecret(id);
 		if (!slot0) {
+			secret.folderKey = std::move(keptKey);
 			return false;
 		}
+		Wipe(keptKey);
 		record->slots[0] = std::move(*slot0);
 		record->publicKey = QByteArray();
 		settings.setFolderProtection(userId(), id, std::move(record));
@@ -1272,6 +1295,10 @@ bool FolderLock::setEncrypted(FilterId id, bool enabled) {
 	}
 	_lockChanges.fire({});
 	return true;
+}
+
+void FolderLock::forgetFolder(FilterId id) {
+	_vault->destroy(publicKey(id));
 }
 
 bool FolderLock::isSealed(not_null<History*> history) const {

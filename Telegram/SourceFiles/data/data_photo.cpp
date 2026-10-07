@@ -7,6 +7,8 @@ https://github.com/telegramdesktop/tdesktop/blob/master/LEGAL
 */
 #include "data/data_photo.h"
 
+#include "ayu/features/folder_lock/folder_seal.h" // AyuGram
+
 #include "data/data_document.h"
 #include "data/data_session.h"
 #include "data/data_reply_preview.h"
@@ -424,6 +426,7 @@ void PhotoData::updateImages(
 		const ImageWithLocation &videoSmall,
 		const ImageWithLocation &videoLarge,
 		crl::time videoStartTime) {
+	const auto ayuSealed = Ayu::SealedScope(Ayu::IsSealedMedia(this));
 	if (!inlineThumbnailBytes.isEmpty()
 		&& _inlineThumbnailBytes.isEmpty()) {
 		_inlineThumbnailBytes = inlineThumbnailBytes;

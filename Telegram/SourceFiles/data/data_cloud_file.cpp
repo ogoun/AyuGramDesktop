@@ -7,6 +7,8 @@ https://github.com/telegramdesktop/tdesktop/blob/master/LEGAL
 */
 #include "data/data_cloud_file.h"
 
+#include "ayu/features/folder_lock/folder_seal.h" // AyuGram
+
 #include "data/data_file_origin.h"
 #include "data/data_session.h"
 #include "storage/cache/storage_cache_database.h"
@@ -206,7 +208,7 @@ void UpdateCloudFile(
 		: v::is<InMemoryLocation>(file.location.file().data)
 		? v::get<InMemoryLocation>(file.location.file().data).bytes
 		: QByteArray();
-	if (!cacheBytes.isEmpty()) {
+	if (!cacheBytes.isEmpty() && !Ayu::SealedScope::Active()) {
 		if (const auto cacheKey = data.location.file().cacheKey()) {
 			cache.putIfEmpty(
 				cacheKey,

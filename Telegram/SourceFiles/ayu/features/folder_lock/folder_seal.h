@@ -31,5 +31,27 @@ namespace Ayu {
 [[nodiscard]] bool IsSealedOrigin(
 	not_null<Main::Session*> session,
 	const Data::FileOrigin &origin);
+// Folders are not loaded yet and some are encrypted: what is sealed is not
+// known, plain data on the disk is neither written nor removed.
+[[nodiscard]] bool IsSealUnknown(not_null<History*> history);
+// Recent search chats: a chat is skipped only when it is known to be sealed.
+[[nodiscard]] bool IsKnownSealedPeer(not_null<PeerData*> peer);
+
+// Media created or updated inside the scope belongs to a sealed chat (its
+// message is not registered yet): IsSealedMedia() is true for any media
+// and the cloud file cache is skipped. Nesting is fine, main thread only.
+class SealedScope final {
+public:
+	explicit SealedScope(bool sealed);
+	SealedScope(const SealedScope &) = delete;
+	SealedScope &operator=(const SealedScope &) = delete;
+	~SealedScope();
+
+	[[nodiscard]] static bool Active();
+
+private:
+	const bool _sealed = false;
+
+};
 
 } // namespace Ayu

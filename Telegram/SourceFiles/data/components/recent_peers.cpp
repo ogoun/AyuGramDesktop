@@ -84,7 +84,7 @@ QByteArray RecentPeers::serialize() const {
 
 	// AyuGram: chats of encrypted folders are not written on the disk.
 	auto stored = _list | ranges::views::filter([](not_null<PeerData*> peer) {
-		return !Ayu::IsSealedPeer(peer);
+		return !Ayu::IsKnownSealedPeer(peer);
 	}) | ranges::to_vector;
 	if (stored.empty()) {
 		return {};

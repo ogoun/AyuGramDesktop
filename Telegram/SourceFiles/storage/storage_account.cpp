@@ -1286,6 +1286,9 @@ void Account::unregisterDraftSource(
 }
 
 void Account::writeDrafts(not_null<History*> history) {
+	if (Ayu::IsSealUnknown(history)) {
+		return; // AyuGram: wait for the folders, keep the disk as is.
+	}
 	const auto peerId = history->peer->id;
 	const auto &map = history->draftsMap();
 	const auto supportMode = history->session().supportMode();
@@ -1386,6 +1389,9 @@ void Account::writeDrafts(not_null<History*> history) {
 }
 
 void Account::writeDraftCursors(not_null<History*> history) {
+	if (Ayu::IsSealUnknown(history)) {
+		return; // AyuGram: wait for the folders, keep the disk as is.
+	}
 	const auto peerId = history->peer->id;
 	const auto &map = history->draftsMap();
 	const auto supportMode = history->session().supportMode();

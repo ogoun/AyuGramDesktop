@@ -17,6 +17,37 @@
 #include "main/main_session.h"
 
 namespace Ayu {
+namespace {
+
+int SealedScopeDepth = 0;
+
+} // namespace
+
+SealedScope::SealedScope(bool sealed) : _sealed(sealed) {
+	if (_sealed) {
+		++SealedScopeDepth;
+	}
+}
+
+SealedScope::~SealedScope() {
+	if (_sealed) {
+		--SealedScopeDepth;
+	}
+}
+
+bool SealedScope::Active() {
+	return SealedScopeDepth > 0;
+}
+
+bool IsSealUnknown(not_null<History*> history) {
+	const auto &lock = history->owner().chatsFilters().folderLock();
+	return lock.rulesPending() && lock.hasEncryptedRecords();
+}
+
+bool IsKnownSealedPeer(not_null<PeerData*> peer) {
+	const auto &lock = peer->owner().chatsFilters().folderLock();
+	return !lock.rulesPending() && lock.isSealed(peer);
+}
 
 bool IsSealedHistory(not_null<History*> history) {
 	return history->owner().chatsFilters().folderLock().isSealed(history);
@@ -27,12 +58,12 @@ bool IsSealedPeer(not_null<PeerData*> peer) {
 }
 
 bool IsSealedMedia(not_null<const DocumentData*> document) {
-	return document->owner().chatsFilters().folderLock().isSealedMedia(
+	return SealedScope::Active() || document->owner().chatsFilters().folderLock().isSealedMedia(
 		document);
 }
 
 bool IsSealedMedia(not_null<const PhotoData*> photo) {
-	return photo->owner().chatsFilters().folderLock().isSealedMedia(photo);
+	return SealedScope::Active() || photo->owner().chatsFilters().folderLock().isSealedMedia(photo);
 }
 
 bool IsSealedOrigin(

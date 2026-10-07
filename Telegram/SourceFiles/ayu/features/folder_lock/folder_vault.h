@@ -67,6 +67,8 @@ public:
 	[[nodiscard]] bool unseal(FilterId id, const QByteArray &privateKey);
 	// The folder is deleted: its records can't be opened by anyone anymore.
 	void destroy(const QByteArray &publicKey);
+	// Records of folders deleted while their removal wasn't seen.
+	void collectGarbage();
 
 private:
 	struct Entry {

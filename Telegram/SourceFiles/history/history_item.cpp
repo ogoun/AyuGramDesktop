@@ -2778,6 +2778,7 @@ void HistoryItem::updateSentContent(
 	if (isEditingMedia()) {
 		return;
 	}
+	const auto ayuSealed = Ayu::SealedScope(Ayu::IsSealedHistory(_history));
 	const auto mediaCheck = media
 		? CheckMessageMedia(*media)
 		: MediaCheckResult::Good;
@@ -6074,6 +6075,8 @@ void HistoryItem::createServiceFromMtp(const MTPDmessageService &message) {
 }
 
 void HistoryItem::setMedia(const MTPMessageMedia &media) {
+	// AyuGram: media of encrypted folder chats is not cached.
+	const auto ayuSealed = Ayu::SealedScope(Ayu::IsSealedHistory(_history));
 	_media = CreateMedia(this, media);
 	checkStoryForwardInfo();
 	checkBuyButton();

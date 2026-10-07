@@ -768,6 +768,7 @@ void DocumentData::updateThumbnails(
 		&& !Core::NameTypeAllowsThumbnail(Core::DetectNameType(_filename))) {
 		return;
 	}
+	const auto ayuSealed = Ayu::SealedScope(Ayu::IsSealedMedia(this));
 	if (!inlineThumbnail.bytes.isEmpty()
 		&& _inlineThumbnailBytes.isEmpty()) {
 		_inlineThumbnailBytes = inlineThumbnail.bytes;

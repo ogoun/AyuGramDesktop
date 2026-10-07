@@ -43,7 +43,9 @@ Document::Document(
 : Document(std::move(reader), document, {}, std::move(otherQualities)) {
 	_player.fullInCache(
 	) | rpl::on_next([=](bool fullInCache) {
-		_document->setLoadedInMediaCache(fullInCache);
+		if (!Ayu::IsSealedMedia(_document)) {
+			_document->setLoadedInMediaCache(fullInCache);
+		}
 	}, _player.lifetime());
 }
 
