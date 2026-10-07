@@ -20,6 +20,8 @@ class Session;
 
 namespace Ayu {
 
+class FolderVault;
+
 enum class UnlockError {
 	None,
 	WrongPin,
@@ -112,16 +114,50 @@ public:
 	// A real-only PIN check got the second PIN: counts as a wrong one.
 	void countWrongPin(FilterId id);
 
+	// Local encryption of the folder chats (with the real PIN settings).
+	[[nodiscard]] bool isEncrypted(FilterId id) const;
+	bool setEncrypted(FilterId id, bool enabled);
+	// Data of the chat must not be written plain on the disk.
+	[[nodiscard]] bool isSealed(not_null<History*> history) const;
+	[[nodiscard]] bool isSealed(not_null<PeerData*> peer) const;
+	[[nodiscard]] FolderVault &vault();
+
+	// For FolderVault.
+	[[nodiscard]] bool rulesPending() const;
+	[[nodiscard]] bool hasEncryptedRecords() const;
+	[[nodiscard]] std::vector<FilterId> encryptedFolders() const;
+	[[nodiscard]] QByteArray publicKey(FilterId id) const;
+	// Only while the folder is unlocked with the real PIN.
+	[[nodiscard]] QByteArray privateKey(FilterId id) const;
+	[[nodiscard]] std::optional<FilterId> sealFolder(
+		not_null<History*> history) const;
+
 	void lock(FilterId id);
 	void lockAll();
 	// Folder rules changed (maybe on another device): close and recount.
 	void rulesChanged();
 
 private:
+	// Zeroed when destroyed (best effort, see FolderLockCrypto::Wipe).
+	struct SecretBytes {
+		SecretBytes() = default;
+		explicit SecretBytes(QByteArray data) : data(std::move(data)) {
+		}
+		SecretBytes(const SecretBytes &other) = default;
+		SecretBytes(SecretBytes &&other) = default;
+		SecretBytes &operator=(const SecretBytes &other) = default;
+		SecretBytes &operator=(SecretBytes &&other) = default;
+		~SecretBytes() {
+			FolderLockCrypto::Wipe(data);
+		}
+
+		QByteArray data;
+	};
 	struct Unlocked {
 		int slot = 0; // 0 = all chats, 1 = second bottom (allowed only).
 		base::flat_set<PeerId> allowed;
 		bool permanent = false; // The PIN was "removed".
+		SecretBytes folderKey; // Slot 0 of an encrypted folder.
 	};
 	struct Access {
 		AccessMode mode = AccessMode::Real;
@@ -175,6 +211,9 @@ private:
 	base::flat_set<FilterId> _checking;
 	base::flat_set<FilterId> _probed;
 	bool _probing = false;
+	base::flat_set<FilterId> _encrypted;
+	bool _encryptedRecords = false; // Also of folders not loaded yet.
+	std::unique_ptr<FolderVault> _vault;
 	base::flat_map<FilterId, Access> _access;
 	// Protection records exist but the folders (rules) aren't loaded yet:
 	// everything is treated as locked until they are.

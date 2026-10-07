@@ -266,6 +266,9 @@ struct FolderProtectionRecord {
 	std::array<QByteArray, 2> slots;
 	int badTries = 0;
 	int64 lastBadTry = 0;
+	// Local encryption of the folder chats: the public key (X25519), the
+	// private one is inside the real slot.
+	QByteArray publicKey;
 };
 
 class AyuSettings {

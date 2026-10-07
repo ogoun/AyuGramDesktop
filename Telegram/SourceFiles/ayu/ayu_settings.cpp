@@ -1196,6 +1196,7 @@ void to_json(nlohmann::json &j, const AyuSettings &s) {
 				} },
 				{ "badTries", r.badTries },
 				{ "lastBadTry", r.lastBadTry },
+				{ "publicKey", r.publicKey.toBase64().toStdString() },
 			};
 		}
 		folderProtection[std::to_string(userId)] = std::move(byFolder);
@@ -1380,6 +1381,9 @@ void from_json(const nlohmann::json &j, AyuSettings &s) {
 						}
 						r.badTries = number(value, "badTries", 0);
 						r.lastBadTry = number(value, "lastBadTry", int64(0));
+						r.publicKey = bytes(value.value(
+							"publicKey",
+							nlohmann::json()));
 					}
 					s._folderProtection[userId][filterId] = std::move(r);
 				}

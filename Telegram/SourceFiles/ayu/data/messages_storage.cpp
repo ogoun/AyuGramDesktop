@@ -7,9 +7,12 @@
 #include "ayu/data/messages_storage.h"
 
 #include "ayu/data/ayu_database.h"
+#include "ayu/features/folder_lock/folder_lock.h"
+#include "ayu/features/folder_lock/folder_vault.h"
 #include "ayu/utils/ayu_mapper.h"
 #include "ayu/utils/telegram_helpers.h"
 #include "base/unixtime.h"
+#include "data/data_chat_filters.h"
 #include "data/data_forum_topic.h"
 #include "data/data_session.h"
 #include "history/history.h"
@@ -27,6 +30,11 @@ std::vector<AyuMessageBase> convertToBase(const std::vector<DerivedMessage> &mes
 		based.push_back(static_cast<AyuMessageBase>(msg));
 	}
 	return based;
+}
+
+// AyuGram: records of the chats of encrypted folders are sealed.
+[[nodiscard]] Ayu::FolderVault &Vault(not_null<PeerData*> peer) {
+	return peer->owner().chatsFilters().folderLock().vault();
 }
 
 void map(not_null<HistoryItem*> item, AyuMessageBase &message) {
@@ -92,6 +100,13 @@ void addEditedMessage(not_null<HistoryItem *> item) {
 		return;
 	}
 
+	const auto history = item->history();
+	if (Vault(history->peer).store(
+			history,
+			Ayu::FolderVaultCodec::Kind::Edited,
+			message)) {
+		return;
+	}
 	AyuDatabase::addEditedMessage(message);
 }
 
@@ -100,7 +115,9 @@ std::vector<AyuMessageBase> getEditedMessages(not_null<HistoryItem*> item, ID mi
 	const auto dialogId = getDialogIdFromPeer(item->history()->peer);
 	const auto msgId = item->id.bare;
 
-	return convertToBase(AyuDatabase::getEditedMessages(userId, dialogId, msgId, minId, maxId, totalLimit));
+	auto result = convertToBase(AyuDatabase::getEditedMessages(userId, dialogId, msgId, minId, maxId, totalLimit));
+	Vault(item->history()->peer).addEdited(dialogId, msgId, minId, maxId, totalLimit, result);
+	return result;
 }
 
 bool hasRevisions(not_null<HistoryItem*> item) {
@@ -108,7 +125,8 @@ bool hasRevisions(not_null<HistoryItem*> item) {
 	const auto dialogId = getDialogIdFromPeer(item->history()->peer);
 	const auto msgId = item->id.bare;
 
-	return AyuDatabase::hasRevisions(userId, dialogId, msgId);
+	return AyuDatabase::hasRevisions(userId, dialogId, msgId)
+		|| Vault(item->history()->peer).hasRevisions(dialogId, msgId);
 }
 
 void addDeletedMessage(not_null<HistoryItem*> item) {
@@ -119,30 +137,46 @@ void addDeletedMessage(not_null<HistoryItem*> item) {
 		return;
 	}
 
+	const auto history = item->history();
+	if (Vault(history->peer).store(
+			history,
+			Ayu::FolderVaultCodec::Kind::Deleted,
+			message)) {
+		return;
+	}
 	AyuDatabase::addDeletedMessage(message);
 }
 
 std::vector<AyuMessageBase>
 getDeletedMessages(not_null<PeerData*> peer, ID topicId, ID minId, ID maxId, int totalLimit, const QString &searchQuery) {
 	const ID userId = peer->session().userId().bare & PeerId::kChatTypeMask;
-	return convertToBase(
-		AyuDatabase::getDeletedMessages(userId, getDialogIdFromPeer(peer), topicId, minId, maxId, totalLimit, searchQuery.toStdString()));
+	const auto dialogId = getDialogIdFromPeer(peer);
+	auto result = convertToBase(
+		AyuDatabase::getDeletedMessages(userId, dialogId, topicId, minId, maxId, totalLimit, searchQuery.toStdString()));
+	Vault(peer).addDeleted(dialogId, topicId, minId, maxId, totalLimit, searchQuery, result);
+	return result;
 }
 
 bool hasDeletedMessages(not_null<PeerData*> peer, ID topicId) {
 	const ID userId = peer->session().userId().bare & PeerId::kChatTypeMask;
-	return AyuDatabase::hasDeletedMessages(userId, getDialogIdFromPeer(peer), topicId);
+	const auto dialogId = getDialogIdFromPeer(peer);
+	return AyuDatabase::hasDeletedMessages(userId, dialogId, topicId)
+		|| Vault(peer).hasDeleted(dialogId, topicId);
 }
 
 void removeDeletedMessage(not_null<HistoryItem*> item) {
 	const auto peer = item->history()->peer;
 	const ID userId = peer->session().userId().bare & PeerId::kChatTypeMask;
-	AyuDatabase::removeDeletedMessage(userId, getDialogIdFromPeer(peer), item->id.bare);
+	const auto dialogId = getDialogIdFromPeer(peer);
+	AyuDatabase::removeDeletedMessage(userId, dialogId, item->id.bare);
+	Vault(peer).removeDeleted(dialogId, item->id.bare);
 }
 
 void clearDeletedMessages(not_null<PeerData*> peer, ID topicId) {
 	const ID userId = peer->session().userId().bare & PeerId::kChatTypeMask;
-	AyuDatabase::clearDeletedMessages(userId, getDialogIdFromPeer(peer), topicId);
+	const auto dialogId = getDialogIdFromPeer(peer);
+	AyuDatabase::clearDeletedMessages(userId, dialogId, topicId);
+	Vault(peer).clearDeleted(dialogId, topicId);
 }
 
 }

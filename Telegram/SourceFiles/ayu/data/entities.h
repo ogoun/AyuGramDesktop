@@ -116,6 +116,17 @@ public:
 	}
 };
 
+// AyuGram: a deleted / edited message of a chat of an encrypted folder,
+// `blob` is a sealed box (ayu/features/folder_lock/folder_vault.h).
+class SealedMessage
+{
+public:
+	ID fakeId;
+	ID userId;
+	std::vector<char> keyTag;
+	std::vector<char> blob;
+};
+
 class SpyMessageRead
 {
 public:

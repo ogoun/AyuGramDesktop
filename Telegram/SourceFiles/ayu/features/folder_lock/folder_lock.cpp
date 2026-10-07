@@ -9,6 +9,7 @@
 #include "ayu/ayu_settings.h"
 #include "ayu/features/folder_lock/folder_lock_crypto.h"
 #include "ayu/features/folder_lock/folder_lock_ui.h"
+#include "ayu/features/folder_lock/folder_vault.h"
 #include "base/unixtime.h"
 #include "core/application.h"
 #include "core/shortcuts.h"
@@ -68,6 +69,7 @@ void SetupLockShortcutOnce() {
 FolderLock::FolderLock(not_null<Main::Session*> session)
 : _session(session)
 , _autolockTimer([=] { checkAutolock(); }) {
+	_vault = std::make_unique<FolderVault>(this, session);
 	// No notify here: FolderLock is created lazily, possibly from inside
 	// Session::refreshChatListEntry(), and a full refresh would re-enter it.
 	refreshProtected(false);
@@ -85,6 +87,16 @@ FolderLock::FolderLock(not_null<Main::Session*> session)
 
 	_autolockTimer.callEach(kAutolockCheckPeriod);
 	SetupLockShortcutOnce();
+
+	// Plain data of encrypted folders left from before (or of chats that
+	// came into such a folder) is sealed when the chats are known.
+	_session->data().chatsListLoadedEvents(
+	) | rpl::on_next([=] {
+		_vault->sweepAll();
+	}, _lifetime);
+	crl::on_main(this, [=] {
+		_vault->sweepAll();
+	});
 }
 
 FolderLock::~FolderLock() = default;
@@ -106,6 +118,12 @@ void FolderLock::refreshProtected(bool notify) {
 		_refreshing = true;
 		for (const auto id : records) {
 			if (!ranges::contains(filters.list(), id, &Data::ChatFilter::id)) {
+				// The records of a deleted folder can't be opened anymore.
+				if (const auto record = settings.folderProtection(
+						userId(),
+						id)) {
+					_vault->destroy(record->publicKey);
+				}
 				settings.setFolderProtection(userId(), id, std::nullopt);
 			}
 		}
@@ -116,10 +134,29 @@ void FolderLock::refreshProtected(bool notify) {
 	_awaitingRules = !records.empty() && !filters.loaded();
 
 	auto now = base::flat_set<FilterId>();
+	auto encrypted = base::flat_set<FilterId>();
 	for (const auto &filter : filters.list()) {
-		if (filter.id() && settings.folderProtection(userId(), filter.id())) {
+		if (!filter.id()) {
+			continue;
+		} else if (const auto record = settings.folderProtection(
+				userId(),
+				filter.id())) {
 			now.emplace(filter.id());
+			if (!record->publicKey.isEmpty()) {
+				encrypted.emplace(filter.id());
+			}
 		}
+	}
+	_encrypted = std::move(encrypted);
+	_encryptedRecords = ranges::any_of(records, [&](int id) {
+		const auto record = settings.folderProtection(userId(), id);
+		return record && !record->publicKey.isEmpty();
+	});
+	if (wasAwaiting && !_awaitingRules) {
+		crl::on_main(this, [=] {
+			_vault->flushPending();
+			_vault->sweepAll();
+		});
 	}
 	for (auto i = begin(_unlocked); i != end(_unlocked);) {
 		if (now.contains(i->first)) {
@@ -336,7 +373,14 @@ void FolderLock::tryUnlock(
 		Wipe(checked.key);
 		if (result.error == UnlockError::None) {
 			auto unlocked = Unlocked{ .slot = checked.slot };
-			if (checked.slot == 1) {
+			if (checked.slot == 0) {
+				auto secret = ParseSecret(checked.content.data);
+				if (secret) {
+					unlocked.folderKey = SecretBytes(
+						std::move(secret->folderKey));
+					Wipe(secret->decoyKey);
+				}
+			} else if (checked.slot == 1) {
 				const auto allowed = ParseAllowed(checked.content.data);
 				for (const auto peer : allowed.value_or(
 						std::vector<uint64_t>())) {
@@ -1029,6 +1073,14 @@ bool FolderLock::removeRealPin(FilterId id) {
 	if (i == end(_access) || i->second.mode != AccessMode::Real) {
 		return false;
 	}
+	// Without the PIN there is no place for the private key: the records
+	// become plain again.
+	if (isEncrypted(id)) {
+		const auto &key = i->second.secret.folderKey;
+		if (key.isEmpty() || !_vault->unseal(id, key)) {
+			_vault->destroy(publicKey(id));
+		}
+	}
 	wipeAccess(id);
 	_unlocked.remove(id);
 	AyuSettings::getInstance().setFolderProtection(
@@ -1105,6 +1157,10 @@ void FolderLock::rulesChanged() {
 		return;
 	}
 	_rules = std::move(rules);
+	// Chats that came into an encrypted folder.
+	crl::on_main(this, [=] {
+		_vault->sweepAll();
+	});
 	wipeAllAccess();
 	for (auto i = begin(_unlocked); i != end(_unlocked);) {
 		if (i->second.permanent) {
@@ -1150,7 +1206,133 @@ void FolderLock::checkAutolock() {
 	}
 }
 
+bool FolderLock::isEncrypted(FilterId id) const {
+	return _encrypted.contains(id);
+}
+
+bool FolderLock::setEncrypted(FilterId id, bool enabled) {
+	const auto i = _access.find(id);
+	auto &settings = AyuSettings::getInstance();
+	auto record = settings.folderProtection(userId(), id);
+	if (i == end(_access) || i->second.mode != AccessMode::Real || !record) {
+		return false;
+	} else if (enabled == !record->publicKey.isEmpty()) {
+		return true;
+	}
+	auto &secret = i->second.secret;
+	if (enabled) {
+		auto pair = GenerateKeyPair();
+		if (pair.publicKey.isEmpty()) {
+			return false;
+		}
+		Wipe(secret.folderKey);
+		secret.folderKey = pair.privateKey;
+		auto slot0 = sealSecret(id);
+		if (!slot0) {
+			Wipe(secret.folderKey);
+			Wipe(pair.privateKey);
+			return false;
+		}
+		record->slots[0] = std::move(*slot0);
+		record->publicKey = pair.publicKey;
+		settings.setFolderProtection(userId(), id, std::move(record));
+		const auto u = _unlocked.find(id);
+		if (u != end(_unlocked) && u->second.slot == 0) {
+			u->second.folderKey = SecretBytes(pair.privateKey);
+		}
+		Wipe(pair.privateKey);
+		_vault->sweep(id);
+		// Media of the folder chats could be cached before.
+		_session->data().cache().clear();
+		_session->data().cacheBigFile().clear();
+	} else {
+		if (!secret.folderKey.isEmpty()
+			&& !_vault->unseal(id, secret.folderKey)) {
+			return false;
+		}
+		const auto oldPublicKey = record->publicKey;
+		Wipe(secret.folderKey);
+		auto slot0 = sealSecret(id);
+		if (!slot0) {
+			return false;
+		}
+		record->slots[0] = std::move(*slot0);
+		record->publicKey = QByteArray();
+		settings.setFolderProtection(userId(), id, std::move(record));
+		_vault->destroy(oldPublicKey); // Left only if they couldn't be opened.
+		const auto u = _unlocked.find(id);
+		if (u != end(_unlocked)) {
+			u->second.folderKey = SecretBytes();
+		}
+		_vault->forgetClosed();
+	}
+	_lockChanges.fire({});
+	return true;
+}
+
+bool FolderLock::isSealed(not_null<History*> history) const {
+	if (_awaitingRules) {
+		return _encryptedRecords;
+	}
+	return sealFolder(history).has_value();
+}
+
+bool FolderLock::isSealed(not_null<PeerData*> peer) const {
+	if (_awaitingRules) {
+		return _encryptedRecords;
+	} else if (_encrypted.empty()) {
+		return false;
+	}
+	return isSealed(peer->owner().history(peer));
+}
+
+FolderVault &FolderLock::vault() {
+	return *_vault;
+}
+
+bool FolderLock::rulesPending() const {
+	return _awaitingRules;
+}
+
+bool FolderLock::hasEncryptedRecords() const {
+	return _encryptedRecords;
+}
+
+std::vector<FilterId> FolderLock::encryptedFolders() const {
+	return _encrypted | ranges::to_vector;
+}
+
+QByteArray FolderLock::publicKey(FilterId id) const {
+	const auto record = AyuSettings::getInstance().folderProtection(
+		userId(),
+		id);
+	return record ? record->publicKey : QByteArray();
+}
+
+QByteArray FolderLock::privateKey(FilterId id) const {
+	const auto i = _unlocked.find(id);
+	return (i != end(_unlocked) && i->second.slot == 0 && isEncrypted(id))
+		? i->second.folderKey.data
+		: QByteArray();
+}
+
+std::optional<FilterId> FolderLock::sealFolder(
+		not_null<History*> history) const {
+	if (_encrypted.empty()) {
+		return std::nullopt;
+	}
+	const auto &list = _session->data().chatsFilters().list();
+	for (const auto id : _encrypted) {
+		const auto i = ranges::find(list, id, &Data::ChatFilter::id);
+		if (i != end(list) && i->matchesRules(history)) {
+			return id;
+		}
+	}
+	return std::nullopt;
+}
+
 void FolderLock::applyChanged(bool locking) {
+	_vault->forgetClosed();
 	_session->data().ayuRefreshAllChatLists();
 	_session->data().notifyUnreadBadgeChanged();
 	_lockChanges.fire({});

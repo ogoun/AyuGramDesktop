@@ -31,6 +31,30 @@ bool hasDeletedMessages(ID userId, ID dialogId, ID topicId);
 void removeDeletedMessage(ID userId, ID dialogId, ID messageId);
 void clearDeletedMessages(ID userId, ID dialogId, ID topicId);
 
+// Encrypted records of the chats of encrypted folders.
+struct UnsealedMessage
+{
+	ID sealedId = 0;
+	int kind = 0; // 1 - deleted, 2 - edited.
+	AyuMessageBase message;
+};
+ID addSealedMessage(const SealedMessage &message);
+std::vector<SealedMessage> getSealedMessages(ID userId, const std::vector<char> &keyTag);
+void removeSealedMessages(const std::vector<ID> &fakeIds);
+void removeSealedByTag(ID userId, const std::vector<char> &keyTag);
+// Plain records of the dialogs become sealed ones in one transaction,
+// `seal` returns the box of a record (empty - the whole move fails).
+int sealPlainMessages(
+	ID userId,
+	const std::vector<ID> &dialogIds,
+	const std::vector<char> &keyTag,
+	const std::function<std::vector<char>(int kind, const AyuMessageBase &message)> &seal);
+// Opened records become plain ones, all records of the tag are removed.
+void unsealMessages(
+	ID userId,
+	const std::vector<char> &keyTag,
+	const std::vector<UnsealedMessage> &messages);
+
 std::vector<RegexFilter> getAllRegexFilters();
 RegexFilter getById(std::vector<char> id);
 std::vector<RegexFilter> getShared();

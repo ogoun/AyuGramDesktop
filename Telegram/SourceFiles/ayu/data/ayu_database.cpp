@@ -131,6 +131,13 @@ auto storage = make_storage(
 		make_column("dialogId", &RegexFilterGlobalExclusion::dialogId),
 		make_column("filterId", &RegexFilterGlobalExclusion::filterId)
 	),
+	make_table<SealedMessage>(
+		"SealedMessage",
+		make_column("fakeId", &SealedMessage::fakeId, primary_key().autoincrement()),
+		make_column("userId", &SealedMessage::userId),
+		make_column("keyTag", &SealedMessage::keyTag),
+		make_column("blob", &SealedMessage::blob)
+	),
 	make_table<SpyMessageRead>(
 		"SpyMessageRead",
 		make_column("fakeId", &SpyMessageRead::fakeId, primary_key().autoincrement()),
@@ -231,6 +238,10 @@ void moveCurrentDatabase() {
 
 void initialize() {
 	std::lock_guard lock(databaseMutex);
+	// AyuGram: removed records (plain copies of encrypted ones) are zeroed.
+	storage.on_open = [](sqlite3 *db) {
+		sqlite3_exec(db, "PRAGMA secure_delete = ON;", nullptr, nullptr, nullptr);
+	};
 	try {
 		storage.sync_schema(true);
 
@@ -410,6 +421,198 @@ void clearDeletedMessages(ID userId, ID dialogId, ID topicId) {
 			)
 		);
 	} catch (std::exception &) {
+	}
+}
+
+namespace {
+
+template <typename Message>
+Message FromBase(const AyuMessageBase &base) {
+	auto result = Message();
+	static_cast<AyuMessageBase&>(result) = base;
+	return result;
+}
+
+void Overwrite(std::string &value) {
+	std::fill(value.begin(), value.end(), '\0');
+}
+
+template <typename Message>
+void OverwriteAll(std::vector<Message> &messages) {
+	for (auto &message : messages) {
+		Overwrite(message.text);
+		Overwrite(message.fwdName);
+		Overwrite(message.postAuthor);
+	}
+	messages.clear();
+}
+
+} // namespace
+
+ID addSealedMessage(const SealedMessage &message) {
+	std::lock_guard lock(databaseMutex);
+	try {
+		return storage.insert(message);
+	} catch (std::exception &ex) {
+		LOG(("Failed to save sealed message: %1").arg(ex.what()));
+		return 0;
+	}
+}
+
+std::vector<SealedMessage> getSealedMessages(ID userId, const std::vector<char> &keyTag) {
+	std::lock_guard lock(databaseMutex);
+	try {
+		return storage.get_all<SealedMessage>(
+			where(
+				column<SealedMessage>(&SealedMessage::userId) == userId and
+				column<SealedMessage>(&SealedMessage::keyTag) == keyTag
+			),
+			order_by(column<SealedMessage>(&SealedMessage::fakeId))
+		);
+	} catch (std::exception &ex) {
+		LOG(("Failed to get sealed messages: %1").arg(ex.what()));
+		return {};
+	}
+}
+
+void removeSealedMessages(const std::vector<ID> &fakeIds) {
+	if (fakeIds.empty()) {
+		return;
+	}
+	std::lock_guard lock(databaseMutex);
+	try {
+		storage.remove_all<SealedMessage>(
+			where(in(&SealedMessage::fakeId, fakeIds))
+		);
+	} catch (std::exception &ex) {
+		LOG(("Failed to remove sealed messages: %1").arg(ex.what()));
+	}
+}
+
+void removeSealedByTag(ID userId, const std::vector<char> &keyTag) {
+	std::lock_guard lock(databaseMutex);
+	try {
+		storage.remove_all<SealedMessage>(
+			where(
+				column<SealedMessage>(&SealedMessage::userId) == userId and
+				column<SealedMessage>(&SealedMessage::keyTag) == keyTag
+			)
+		);
+	} catch (std::exception &ex) {
+		LOG(("Failed to remove sealed messages by tag: %1").arg(ex.what()));
+	}
+}
+
+int sealPlainMessages(
+		ID userId,
+		const std::vector<ID> &dialogIds,
+		const std::vector<char> &keyTag,
+		const std::function<std::vector<char>(int kind, const AyuMessageBase &message)> &seal) {
+	if (dialogIds.empty()) {
+		return 0;
+	}
+	std::lock_guard lock(databaseMutex);
+	auto deleted = std::vector<DeletedMessage>();
+	auto edited = std::vector<EditedMessage>();
+	try {
+		deleted = storage.get_all<DeletedMessage>(
+			where(
+				column<DeletedMessage>(&DeletedMessage::userId) == userId and
+				in(column<DeletedMessage>(&DeletedMessage::dialogId), dialogIds)
+			)
+		);
+		edited = storage.get_all<EditedMessage>(
+			where(
+				column<EditedMessage>(&EditedMessage::userId) == userId and
+				in(column<EditedMessage>(&EditedMessage::dialogId), dialogIds)
+			)
+		);
+	} catch (std::exception &ex) {
+		LOG(("Failed to read plain messages to seal: %1").arg(ex.what()));
+		return 0;
+	}
+	if (deleted.empty() && edited.empty()) {
+		return 0;
+	}
+	auto sealed = std::vector<SealedMessage>();
+	sealed.reserve(deleted.size() + edited.size());
+	const auto add = [&](int kind, const AyuMessageBase &message) {
+		auto blob = seal(kind, message);
+		if (blob.empty()) {
+			return false;
+		}
+		sealed.push_back(SealedMessage{ 0, userId, keyTag, std::move(blob) });
+		return true;
+	};
+	auto ok = true;
+	for (const auto &message : deleted) {
+		ok = ok && add(1, message);
+	}
+	for (const auto &message : edited) {
+		ok = ok && add(2, message);
+	}
+	OverwriteAll(deleted);
+	OverwriteAll(edited);
+	if (!ok) {
+		LOG(("Failed to seal plain messages."));
+		return 0;
+	}
+	try {
+		storage.begin_transaction();
+		for (const auto &message : sealed) {
+			storage.insert(message);
+		}
+		storage.remove_all<DeletedMessage>(
+			where(
+				column<DeletedMessage>(&DeletedMessage::userId) == userId and
+				in(column<DeletedMessage>(&DeletedMessage::dialogId), dialogIds)
+			)
+		);
+		storage.remove_all<EditedMessage>(
+			where(
+				column<EditedMessage>(&EditedMessage::userId) == userId and
+				in(column<EditedMessage>(&EditedMessage::dialogId), dialogIds)
+			)
+		);
+		storage.commit();
+	} catch (std::exception &ex) {
+		try {
+			storage.rollback();
+		} catch (...) {
+		}
+		LOG(("Failed to move plain messages to sealed: %1").arg(ex.what()));
+		return 0;
+	}
+	return int(sealed.size());
+}
+
+void unsealMessages(
+		ID userId,
+		const std::vector<char> &keyTag,
+		const std::vector<UnsealedMessage> &messages) {
+	std::lock_guard lock(databaseMutex);
+	try {
+		storage.begin_transaction();
+		for (const auto &message : messages) {
+			if (message.kind == 1) {
+				storage.insert(FromBase<DeletedMessage>(message.message));
+			} else if (message.kind == 2) {
+				storage.insert(FromBase<EditedMessage>(message.message));
+			}
+		}
+		storage.remove_all<SealedMessage>(
+			where(
+				column<SealedMessage>(&SealedMessage::userId) == userId and
+				column<SealedMessage>(&SealedMessage::keyTag) == keyTag
+			)
+		);
+		storage.commit();
+	} catch (std::exception &ex) {
+		try {
+			storage.rollback();
+		} catch (...) {
+		}
+		LOG(("Failed to move sealed messages to plain: %1").arg(ex.what()));
 	}
 }
 
