@@ -541,6 +541,8 @@ void AddFolderProtectionSection(
 		rpl::variable<bool>>(lock->settingsMode(id) == AccessMode::Real);
 	const auto decoyState = container->lifetime().make_state<
 		rpl::variable<bool>>(lock->hasDecoy(id));
+	const auto encryptedState = container->lifetime().make_state<
+		rpl::variable<bool>>(lock->isEncrypted(id));
 	const auto hidden = container->lifetime().make_state<
 		rpl::variable<bool>>(hideFromAll->checked());
 	const auto autolockLabel = container->lifetime().make_state<
@@ -549,6 +551,7 @@ void AddFolderProtectionSection(
 		*protectedState = shownProtected();
 		*realState = (lock->settingsMode(id) == AccessMode::Real);
 		*decoyState = lock->hasDecoy(id);
+		*encryptedState = lock->isEncrypted(id);
 		*autolockLabel = AutolockText(lock->autolockMinutes(id));
 	});
 	lock->lockChanges() | rpl::on_next(refresh, container->lifetime());
@@ -587,6 +590,18 @@ void AddFolderProtectionSection(
 		manage,
 		tr::ayu_FolderLockRemovePin(),
 		st::settingsAttentionButton);
+
+	// Local encryption: only with the real PIN (the private key is there).
+	const auto encryptWrap = manage->add(
+		object_ptr<Ui::SlideWrap<Ui::VerticalLayout>>(
+			manage,
+			object_ptr<Ui::VerticalLayout>(manage)));
+	const auto encrypt = Settings::AddButtonWithIcon(
+		encryptWrap->entity(),
+		tr::ayu_FolderLockEncrypt(),
+		st::settingsButtonNoIcon);
+	encrypt->toggleOn(encryptedState->value());
+	Ui::AddDividerText(encryptWrap->entity(), tr::ayu_FolderLockEncryptAbout());
 
 	// Second bottom: only with the real PIN.
 	const auto decoyWrap = manage->add(
@@ -642,6 +657,7 @@ void AddFolderProtectionSection(
 	) | rpl::map(rpl::mappers::_1 && !rpl::mappers::_2));
 	manageWrap->toggleOn(protectedState->value());
 	decoyWrap->toggleOn(realState->value());
+	encryptWrap->toggleOn(realState->value());
 	setupWrap->toggleOn(decoyState->value() | rpl::map(!rpl::mappers::_1));
 	decoyManageWrap->toggleOn(decoyState->value());
 
@@ -747,6 +763,15 @@ void AddFolderProtectionSection(
 			.confirmStyle = &st::attentionBoxButton,
 		}));
 	});
+	encrypt->toggledChanges(
+	) | rpl::filter([=](bool enabled) {
+		return enabled != lock->isEncrypted(id);
+	}) | rpl::on_next([=](bool enabled) {
+		if (!lock->setEncrypted(id, enabled)) {
+			controller->showToast(failText);
+		}
+		refresh();
+	}, encrypt->lifetime());
 	autolock->setClickedCallback([=] {
 		const auto current = lock->autolockMinutes(id);
 		auto options = std::vector<QString>();

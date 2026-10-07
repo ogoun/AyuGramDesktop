@@ -848,6 +848,13 @@ public:
 	void registerDocumentItem(
 		not_null<const DocumentData*> document,
 		not_null<HistoryItem*> item);
+	// AyuGram: any message showing the media matches (encrypted folders).
+	[[nodiscard]] bool ayuAnyMediaItem(
+		not_null<const DocumentData*> document,
+		Fn<bool(not_null<HistoryItem*>)> predicate) const;
+	[[nodiscard]] bool ayuAnyMediaItem(
+		not_null<const PhotoData*> photo,
+		Fn<bool(not_null<HistoryItem*>)> predicate) const;
 	void unregisterDocumentItem(
 		not_null<const DocumentData*> document,
 		not_null<HistoryItem*> item);

@@ -10,6 +10,7 @@ https://github.com/telegramdesktop/tdesktop/blob/master/LEGAL
 #include "data/data_document.h"
 #include "data/data_session.h"
 #include "data/data_file_origin.h"
+#include "ayu/features/folder_lock/folder_seal.h" // AyuGram
 #include "mainwidget.h"
 #include "mainwindow.h"
 #include "core/application.h"
@@ -458,7 +459,9 @@ bool FileLoader::finalizeResult() {
 		Platform::File::PostprocessDownloaded(
 			QFileInfo(_file).absoluteFilePath());
 	}
-	if (_localStatus == LocalStatus::NotFound) {
+	// AyuGram: nothing of the chats of encrypted folders in the caches.
+	const auto ayuSealed = Ayu::IsSealedOrigin(_session, fileOrigin());
+	if (_localStatus == LocalStatus::NotFound && !ayuSealed) {
 		if (const auto key = fileLocationKey()) {
 			if (!_filename.isEmpty()) {
 				_session->local().writeFileLocation(

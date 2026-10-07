@@ -7,6 +7,8 @@ https://github.com/telegramdesktop/tdesktop/blob/master/LEGAL
 */
 #include "data/data_auto_download.h"
 
+#include "ayu/features/folder_lock/folder_seal.h" // AyuGram
+
 #include "data/data_peer.h"
 #include "data/data_photo.h"
 #include "data/data_document.h"
@@ -370,6 +372,8 @@ bool Should(
 		not_null<DocumentData*> document) {
 	if (document->sticker()) {
 		return true;
+	} else if (Ayu::IsSealedPeer(peer)) {
+		return false; // AyuGram: encrypted folder chats.
 	}
 	const auto override = data.peerOverride(peer->id);
 	if (override == Override::ForceDeny) {
@@ -407,6 +411,9 @@ bool Should(
 		const Full &data,
 		not_null<PeerData*> peer,
 		not_null<PhotoData*> photo) {
+	if (Ayu::IsSealedPeer(peer)) {
+		return false; // AyuGram: encrypted folder chats.
+	}
 	const auto override = data.peerOverride(peer->id);
 	if (override == Override::ForceDeny) {
 		return false;
@@ -429,6 +436,8 @@ bool ShouldAutoPlay(
 		not_null<DocumentData*> document) {
 	if (document->sticker()) {
 		return true;
+	} else if (Ayu::IsSealedPeer(peer)) {
+		return false; // AyuGram: encrypted folder chats.
 	}
 	const auto override = data.peerOverride(peer->id);
 	if (override == Override::ForceDeny) {
@@ -450,7 +459,7 @@ bool ShouldAutoPlay(
 		const Full &data,
 		not_null<PeerData*> peer,
 		not_null<PhotoData*> photo) {
-	if (!photo->hasVideo()) {
+	if (!photo->hasVideo() || Ayu::IsSealedPeer(peer)) {
 		return false;
 	}
 	const auto override = data.peerOverride(peer->id);

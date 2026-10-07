@@ -12,6 +12,7 @@ https://github.com/telegramdesktop/tdesktop/blob/master/LEGAL
 #include "data/data_session.h"
 #include "data/data_chat_filters.h"
 #include "ayu/features/folder_lock/folder_lock.h" // AyuGram
+#include "ayu/features/folder_lock/folder_seal.h" // AyuGram
 #include "data/data_thread.h"
 #include "history/history.h"
 #include "main/main_session.h"
@@ -81,12 +82,16 @@ void RecentPeers::clear() {
 QByteArray RecentPeers::serialize() const {
 	_session->local().readSearchSuggestions();
 
-	if (_list.empty()) {
+	// AyuGram: chats of encrypted folders are not written on the disk.
+	auto stored = _list | ranges::views::filter([](not_null<PeerData*> peer) {
+		return !Ayu::IsSealedPeer(peer);
+	}) | ranges::to_vector;
+	if (stored.empty()) {
 		return {};
 	}
 	auto size = 2 * sizeof(quint32); // AppVersion, count
-	const auto count = std::min(int(_list.size()), kLimit);
-	auto &&list = _list | ranges::views::take(count);
+	const auto count = std::min(int(stored.size()), kLimit);
+	auto &&list = stored | ranges::views::take(count);
 	for (const auto &peer : list) {
 		size += Serialize::peerSize(peer);
 	}

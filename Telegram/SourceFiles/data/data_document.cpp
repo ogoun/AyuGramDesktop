@@ -7,6 +7,8 @@ https://github.com/telegramdesktop/tdesktop/blob/master/LEGAL
 */
 #include "data/data_document.h"
 
+#include "ayu/features/folder_lock/folder_seal.h" // AyuGram
+
 #include "data/data_document_resolver.h"
 #include "data/data_session.h"
 #include "data/data_streaming.h"
@@ -730,7 +732,9 @@ void DocumentData::setDataAndCache(const QByteArray &data) {
 	if (const auto media = activeMediaView()) {
 		media->setBytes(data);
 	}
-	if (saveToCache() && data.size() <= Storage::kMaxFileInMemory) {
+	if (saveToCache()
+		&& data.size() <= Storage::kMaxFileInMemory
+		&& !Ayu::IsSealedMedia(this)) {
 		owner().cache().put(
 			cacheKey(),
 			Storage::Cache::Database::TaggedValue(

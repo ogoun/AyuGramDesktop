@@ -241,6 +241,8 @@ set(ayugram_files
         ayu/features/folder_lock/folder_lock_merge.h
         ayu/features/folder_lock/folder_lock_ui.cpp
         ayu/features/folder_lock/folder_lock_ui.h
+        ayu/features/folder_lock/folder_seal.cpp
+        ayu/features/folder_lock/folder_seal.h
         ayu/features/folder_lock/folder_vault.cpp
         ayu/features/folder_lock/folder_vault.h
         ayu/features/folder_lock/folder_vault_codec.cpp

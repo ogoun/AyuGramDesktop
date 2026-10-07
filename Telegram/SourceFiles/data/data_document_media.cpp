@@ -7,6 +7,8 @@ https://github.com/telegramdesktop/tdesktop/blob/master/LEGAL
 */
 #include "data/data_document_media.h"
 
+#include "ayu/features/folder_lock/folder_seal.h" // AyuGram
+
 #include "data/data_document.h"
 #include "data/data_document_resolver.h"
 #include "data/data_session.h"
@@ -489,6 +491,9 @@ void DocumentMedia::GenerateGoodThumbnail(
 			document->setGoodThumbnailChecked(true);
 			if (const auto active = document->activeMediaView()) {
 				active->setGoodThumbnail(result);
+			}
+			if (Ayu::IsSealedMedia(document)) {
+				return;
 			}
 			document->owner().cache().put(
 				document->goodThumbnailCacheKey(),

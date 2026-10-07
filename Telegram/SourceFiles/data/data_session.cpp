@@ -5233,6 +5233,29 @@ void Session::registerDocumentItem(
 	_documentItems[document].insert(item);
 }
 
+bool Session::ayuAnyMediaItem(
+		not_null<const DocumentData*> document,
+		Fn<bool(not_null<HistoryItem*>)> predicate) const {
+	const auto i = _documentItems.find(document);
+	return (i != _documentItems.end())
+		&& ranges::any_of(i->second, predicate);
+}
+
+bool Session::ayuAnyMediaItem(
+		not_null<const PhotoData*> photo,
+		Fn<bool(not_null<HistoryItem*>)> predicate) const {
+	const auto i = _photoItems.find(photo);
+	if (i == _photoItems.end()) {
+		return false;
+	}
+	for (const auto &[item, count] : i->second) {
+		if (predicate(item)) {
+			return true;
+		}
+	}
+	return false;
+}
+
 void Session::unregisterDocumentItem(
 		not_null<const DocumentData*> document,
 		not_null<HistoryItem*> item) {

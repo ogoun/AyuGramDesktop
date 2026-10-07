@@ -7,6 +7,8 @@ https://github.com/telegramdesktop/tdesktop/blob/master/LEGAL
 */
 #include "data/data_media_preload.h"
 
+#include "ayu/features/folder_lock/folder_seal.h" // AyuGram
+
 #include "data/data_document.h"
 #include "data/data_document_media.h"
 #include "data/data_file_origin.h"
@@ -135,7 +137,7 @@ void VideoPreload::load() {
 
 void VideoPreload::done(QByteArray result) {
 	const auto key = _video->bigFileBaseCacheKey();
-	if (!result.isEmpty() && key) {
+	if (!result.isEmpty() && key && !Ayu::IsSealedMedia(_video)) {
 		Assert(result.size() < Storage::kMaxFileInMemory);
 		_video->owner().cacheBigFile().putIfEmpty(
 			key,

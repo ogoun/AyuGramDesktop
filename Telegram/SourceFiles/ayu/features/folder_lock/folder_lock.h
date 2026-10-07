@@ -13,6 +13,12 @@
 
 class History;
 class PeerData;
+class DocumentData;
+class PhotoData;
+
+namespace Data {
+struct FileOrigin;
+} // namespace Data
 
 namespace Main {
 class Session;
@@ -120,6 +126,10 @@ public:
 	// Data of the chat must not be written plain on the disk.
 	[[nodiscard]] bool isSealed(not_null<History*> history) const;
 	[[nodiscard]] bool isSealed(not_null<PeerData*> peer) const;
+	[[nodiscard]] bool isSealedMedia(
+		not_null<const DocumentData*> document) const;
+	[[nodiscard]] bool isSealedMedia(not_null<const PhotoData*> photo) const;
+	[[nodiscard]] bool isSealedOrigin(const Data::FileOrigin &origin) const;
 	[[nodiscard]] FolderVault &vault();
 
 	// For FolderVault.

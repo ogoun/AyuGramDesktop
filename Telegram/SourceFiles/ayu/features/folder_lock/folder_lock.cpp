@@ -16,13 +16,17 @@
 #include "main/main_account.h"
 #include "main/main_domain.h"
 #include "data/data_chat_filters.h"
+#include "data/data_document.h"
+#include "data/data_file_origin.h"
 #include "data/data_folder.h"
+#include "data/data_photo.h"
 #include "data/data_peer.h"
 #include "data/data_session.h"
 #include "dialogs/dialogs_indexed_list.h"
 #include "dialogs/dialogs_main_list.h"
 #include "dialogs/dialogs_row.h"
 #include "history/history.h"
+#include "history/history_item.h"
 #include "main/main_session.h"
 #include "window/notifications_manager.h"
 
@@ -1284,6 +1288,53 @@ bool FolderLock::isSealed(not_null<PeerData*> peer) const {
 		return false;
 	}
 	return isSealed(peer->owner().history(peer));
+}
+
+bool FolderLock::isSealedMedia(
+		not_null<const DocumentData*> document) const {
+	if (!_encryptedRecords) {
+		return false;
+	} else if (_awaitingRules) {
+		return true;
+	}
+	return _session->data().ayuAnyMediaItem(document, [&](
+			not_null<HistoryItem*> item) {
+		return isSealed(item->history());
+	});
+}
+
+bool FolderLock::isSealedMedia(not_null<const PhotoData*> photo) const {
+	if (!_encryptedRecords) {
+		return false;
+	} else if (_awaitingRules) {
+		return true;
+	}
+	return _session->data().ayuAnyMediaItem(photo, [&](
+			not_null<HistoryItem*> item) {
+		return isSealed(item->history());
+	});
+}
+
+bool FolderLock::isSealedOrigin(const Data::FileOrigin &origin) const {
+	if (!_encryptedRecords) {
+		return false;
+	} else if (_awaitingRules) {
+		return true;
+	}
+	const auto peer = [&](PeerId id) {
+		return id && isSealed(_session->data().peer(id));
+	};
+	return v::match(origin.data, [&](const Data::FileOriginMessage &data) {
+		return peer(data.peer);
+	}, [&](const Data::FileOriginPeerPhoto &data) {
+		return peer(data.peerId);
+	}, [&](const Data::FileOriginUserPhoto &data) {
+		return peer(peerFromUser(data.userId));
+	}, [&](const Data::FileOriginFullUser &data) {
+		return peer(peerFromUser(data.userId));
+	}, [](const auto &) {
+		return false;
+	});
 }
 
 FolderVault &FolderLock::vault() {

@@ -7,6 +7,8 @@ https://github.com/telegramdesktop/tdesktop/blob/master/LEGAL
 */
 #include "media/streaming/media_streaming_document.h"
 
+#include "ayu/features/folder_lock/folder_seal.h" // AyuGram
+
 #include "media/streaming/media_streaming_instance.h"
 #include "media/streaming/media_streaming_loader.h"
 #include "media/streaming/media_streaming_reader.h"
@@ -348,6 +350,9 @@ void Document::validateGoodThumbnail() {
 			}
 			if (bytes != "(failed)"_q) {
 				document->setGoodThumbnailChecked(true);
+			}
+			if (Ayu::IsSealedMedia(document)) {
+				return;
 			}
 			document->owner().cache().putIfEmpty(
 				document->goodThumbnailCacheKey(),

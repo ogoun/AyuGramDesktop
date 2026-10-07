@@ -7,6 +7,8 @@ https://github.com/telegramdesktop/tdesktop/blob/master/LEGAL
 */
 #include "storage/file_upload.h"
 
+#include "ayu/features/folder_lock/folder_seal.h" // AyuGram
+
 #include "api/api_editing.h"
 #include "api/api_send_progress.h"
 #include "boxes/abstract_box.h"
@@ -343,7 +345,8 @@ void Uploader::upload(
 				active->setThumbnail(file->thumb);
 			}
 		}
-		if (!file->goodThumbnailBytes.isEmpty()) {
+		if (!file->goodThumbnailBytes.isEmpty()
+			&& !Ayu::IsSealedMedia(document)) {
 			document->owner().cache().putIfEmpty(
 				document->goodThumbnailCacheKey(),
 				Storage::Cache::Database::TaggedValue(

@@ -7,6 +7,8 @@ https://github.com/telegramdesktop/tdesktop/blob/master/LEGAL
 */
 #include "data/data_streaming.h"
 
+#include "ayu/features/folder_lock/folder_seal.h" // AyuGram
+
 #include "data/data_photo.h"
 #include "data/data_document.h"
 #include "data/data_session.h"
@@ -105,9 +107,12 @@ template <typename Data>
 	if (!loader) {
 		return nullptr;
 	}
+	// AyuGram: streamed parts of encrypted folder chats stay in memory.
+	const auto ayuSealed = Ayu::IsSealedMedia(data)
+		|| Ayu::IsSealedOrigin(&_owner->session(), origin);
 	auto result = std::make_shared<Reader>(
 		std::move(loader),
-		&_owner->cacheBigFile());
+		ayuSealed ? nullptr : &_owner->cacheBigFile());
 	if (!PruneDestroyedAndSet(readers, data, result)) {
 		readers.emplace_or_assign(data, result);
 	}

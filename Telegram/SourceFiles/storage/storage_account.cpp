@@ -7,6 +7,8 @@ https://github.com/telegramdesktop/tdesktop/blob/master/LEGAL
 */
 #include "storage/storage_account.h"
 
+#include "ayu/features/folder_lock/folder_seal.h" // AyuGram
+
 #include "storage/localstorage.h"
 #include "storage/storage_domain.h"
 #include "storage/storage_encryption.h"
@@ -1297,7 +1299,8 @@ void Account::writeDrafts(not_null<History*> history) {
 		supportMode,
 		sources,
 		[&](auto&&...) { ++count; });
-	if (!count) {
+	// AyuGram: drafts of encrypted folder chats are not kept on the disk.
+	if (!count || Ayu::IsSealedHistory(history)) {
 		auto i = _draftsMap.find(peerId);
 		if (i != _draftsMap.cend()) {
 			ClearKey(i->second, _basePath);
@@ -1396,7 +1399,7 @@ void Account::writeDraftCursors(not_null<History*> history) {
 		supportMode,
 		sources,
 		[&](auto&&...) { ++count; });
-	if (!count) {
+	if (!count || Ayu::IsSealedHistory(history)) {
 		clearDraftCursors(peerId);
 		return;
 	}

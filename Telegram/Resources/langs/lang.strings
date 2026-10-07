@@ -9222,5 +9222,7 @@ https://github.com/telegramdesktop/tdesktop/blob/master/LEGAL
 "ayu_FolderLockDecoyPin" = "Second PIN";
 "ayu_FolderLockDecoySame" = "The second PIN must differ from the main one.";
 "ayu_FolderLockRealSame" = "The main PIN must differ from the second one.";
+"ayu_FolderLockEncrypt" = "Encrypt chats on this device";
+"ayu_FolderLockEncryptAbout" = "Deleted and edited messages of this folder chats are stored encrypted and open only with the main PIN. Their media and drafts are not saved on this device and media is not downloaded automatically. Turning it on clears the media cache.";
 "ayu_FolderLockDecoyAbout" = "With the second PIN only the allowed chats of this folder are shown, its settings look like a folder with one PIN.";
 "ayu_FolderLockDecoyTooMany" = "Too many chats selected.";
