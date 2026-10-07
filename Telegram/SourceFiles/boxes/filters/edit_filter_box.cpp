@@ -602,6 +602,16 @@ void EditFilterBox(
 	box->setCloseByOutsideClick(false);
 
 	const auto session = &window->session();
+	// AyuGram: fake settings in the decoy mode, the access ends with the box.
+	const auto ayuMode = session->data().chatsFilters().folderLock()
+		.settingsMode(filter.id());
+	const auto ayuFake = ayuMode && (*ayuMode != Ayu::AccessMode::Real);
+	if (filter.id()) {
+		const auto filterId = filter.id();
+		box->lifetime().add([=] {
+			session->data().chatsFilters().folderLock().endSettings(filterId);
+		});
+	}
 	Data::AmPremiumValue(
 		session
 	) | rpl::on_next([=] {
@@ -1074,16 +1084,26 @@ void EditFilterBox(
 		).withColorIndex(colorIndex);
 	};
 
+	// AyuGram: no folder links in the decoy mode, they would reveal all
+	// chats of the folder.
+	const auto linksWrap = content->add(
+		object_ptr<Ui::SlideWrap<Ui::VerticalLayout>>(
+			content,
+			object_ptr<Ui::VerticalLayout>(content)));
+	const auto links = linksWrap->entity();
+	if (ayuFake) {
+		linksWrap->hide(anim::type::instant);
+	}
 	Ui::AddSubsectionTitle(
-		content,
+		links,
 		rpl::conditional(
 			state->hasLinks.value(),
 			tr::lng_filters_link_has(),
 			tr::lng_filters_link()));
 
 	state->hasLinks.changes() | rpl::on_next([=] {
-		content->resizeToWidth(content->widthNoMargins());
-	}, content->lifetime());
+		links->resizeToWidth(links->widthNoMargins());
+	}, links->lifetime());
 
 	if (filter.chatlist()) {
 		window->session().data().chatsFilters().reloadChatlistLinks(
@@ -1091,20 +1111,20 @@ void EditFilterBox(
 	}
 
 	const auto createLink = AddToggledButton(
-		content,
+		links,
 		state->hasLinks.value() | rpl::map(!rpl::mappers::_1),
 		tr::lng_filters_link_create(),
 		st::settingsButtonActive,
 		{ &st::settingsFolderShareIcon, IconType::Simple });
 	const auto addLink = AddToggledButton(
-		content,
+		links,
 		state->hasLinks.value(),
 		tr::lng_group_invite_add(),
 		st::settingsButtonActive,
 		{ &st::settingsIconAdd, IconType::Round, &st::windowBgActive });
 
 	SetupFilterLinks(
-		content,
+		links,
 		window,
 		state->links.value(),
 		[=] { return collect().value_or(Data::ChatFilter()); });
@@ -1154,9 +1174,9 @@ void EditFilterBox(
 			}));
 		}));
 	}, createLink->lifetime());
-	Ui::AddSkip(content);
+	Ui::AddSkip(links);
 	Ui::AddDividerText(
-		content,
+		links,
 		rpl::conditional(
 			state->hasLinks.value(),
 			tr::lng_filters_link_about_many(),
@@ -1225,9 +1245,12 @@ void EditExistingFilterUnlocked(
 	if (i == end(list)) {
 		return;
 	}
-	const auto doneCallback = [=](const Data::ChatFilter &result) {
-		Expects(id == result.id());
+	// AyuGram: the decoy mode shows fake data and merges it back.
+	const auto edit = Ayu::PrepareFolderEdit(session, *i);
+	const auto doneCallback = [=](const Data::ChatFilter &shown) {
+		Expects(id == shown.id());
 
+		const auto result = edit.restore(shown);
 		const auto tl = result.tl();
 		session->data().chatsFilters().apply(MTP_updateDialogFilter(
 			MTP_flags(MTPDupdateDialogFilter::Flag::f_filter),
@@ -1248,7 +1271,7 @@ void EditExistingFilterUnlocked(
 	window->window().show(Box(
 		EditFilterBox,
 		window,
-		*i,
+		edit.shown,
 		crl::guard(session, doneCallback),
 		crl::guard(session, saveAnd)));
 }
@@ -1260,13 +1283,9 @@ void EditExistingFilter(
 		FilterId id) {
 	Expects(id != 0);
 
-	// AyuGram: settings of a protected folder only after its PIN.
-	const auto session = &window->session();
-	if (session->data().chatsFilters().folderLock().isProtected(id)) {
-		Ayu::ShowVerifyFolderPinBox(window, id, crl::guard(window, [=] {
-			EditExistingFilterUnlocked(window, id);
-		}));
-		return;
-	}
-	EditExistingFilterUnlocked(window, id);
+	// AyuGram: settings of a protected folder only after its PIN, the mode
+	// (real / decoy / removed) decides what the box shows.
+	Ayu::OpenFolderSettings(window, id, crl::guard(window, [=](auto) {
+		EditExistingFilterUnlocked(window, id);
+	}));
 }

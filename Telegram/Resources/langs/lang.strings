@@ -9214,3 +9214,12 @@ https://github.com/telegramdesktop/tdesktop/blob/master/LEGAL
 "ayu_FolderLockFailed" = "Couldn't check the PIN.";
 "ayu_FolderLockNeedHide" = "Turn on \"Don't show chats in All Chats\" to set a PIN.";
 "ayu_FolderLockRemoveFirst" = "Remove the PIN first.";
+"ayu_FolderLockDecoy" = "Second bottom";
+"ayu_FolderLockDecoySetup" = "Set up second bottom";
+"ayu_FolderLockDecoyChangePin" = "Change second PIN";
+"ayu_FolderLockDecoyChats" = "Allowed chats";
+"ayu_FolderLockDecoyOff" = "Turn off second bottom";
+"ayu_FolderLockDecoyPin" = "Second PIN";
+"ayu_FolderLockDecoySame" = "The second PIN must differ from the main one.";
+"ayu_FolderLockDecoyAbout" = "With the second PIN only the allowed chats of this folder are shown, its settings look like a folder with one PIN.";
+"ayu_FolderLockDecoyTooMany" = "Too many chats selected.";

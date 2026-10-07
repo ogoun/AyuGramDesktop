@@ -477,7 +477,7 @@ not_null<Ui::VerticalLayout*> SetupFoldersList(
 			const auto id = find(button)->filter.id();
 			if (controller->session().data().chatsFilters().folderLock()
 					.isProtected(id)) {
-				Ayu::ShowVerifyFolderPinBox(
+				Ayu::ShowVerifyRealPinBox(
 					controller,
 					id,
 					crl::guard(button, [=] { remove(button); }));
@@ -509,23 +509,30 @@ not_null<Ui::VerticalLayout*> SetupFoldersList(
 				state->save(button, next);
 			};
 			const auto open = [=] {
+				// AyuGram: fake data in the decoy mode, merged back on save.
+				const auto edit = Ayu::PrepareFolderEdit(
+					&controller->session(),
+					find(button)->filter);
+				const auto restoreDone = [=](const Data::ChatFilter &shown) {
+					doneCallback(edit.restore(shown));
+				};
+				const auto restoreSaveAnd = [=](
+						const Data::ChatFilter &shown,
+						Fn<void(Data::ChatFilter)> next) {
+					saveAnd(edit.restore(shown), next);
+				};
 				controller->window().show(Box(
 					EditFilterBox,
 					controller,
-					find(button)->filter,
-					crl::guard(button, doneCallback),
-					crl::guard(button, saveAnd)));
+					edit.shown,
+					crl::guard(button, restoreDone),
+					crl::guard(button, restoreSaveAnd)));
 			};
-			const auto id = found->filter.id();
-			if (controller->session().data().chatsFilters().folderLock()
-					.isProtected(id)) { // AyuGram: settings only after PIN.
-				Ayu::ShowVerifyFolderPinBox(
-					controller,
-					id,
-					crl::guard(button, open));
-			} else {
-				open();
-			}
+			// AyuGram: settings of a protected folder only after its PIN.
+			Ayu::OpenFolderSettings(
+				controller,
+				found->filter.id(),
+				crl::guard(button, [=](auto) { open(); }));
 		});
 		state->rows.push_back({ button, filter });
 		state->count = state->rows.size();
@@ -842,7 +849,7 @@ void SetupRecommendedSection(
 			const auto id = find(button)->filter.id();
 			if (controller->session().data().chatsFilters().folderLock()
 					.isProtected(id)) {
-				Ayu::ShowVerifyFolderPinBox(
+				Ayu::ShowVerifyRealPinBox(
 					controller,
 					id,
 					crl::guard(button, doRemove));
@@ -874,23 +881,30 @@ void SetupRecommendedSection(
 				state->save(button, next);
 			};
 			const auto open = [=] {
+				// AyuGram: fake data in the decoy mode, merged back on save.
+				const auto edit = Ayu::PrepareFolderEdit(
+					&controller->session(),
+					find(button)->filter);
+				const auto restoreDone = [=](const Data::ChatFilter &shown) {
+					doneCallback(edit.restore(shown));
+				};
+				const auto restoreSaveAnd = [=](
+						const Data::ChatFilter &shown,
+						Fn<void(Data::ChatFilter)> next) {
+					saveAnd(edit.restore(shown), next);
+				};
 				controller->window().show(Box(
 					EditFilterBox,
 					controller,
-					find(button)->filter,
-					crl::guard(button, doneCallback),
-					crl::guard(button, saveAnd)));
+					edit.shown,
+					crl::guard(button, restoreDone),
+					crl::guard(button, restoreSaveAnd)));
 			};
-			const auto id = found->filter.id();
-			if (controller->session().data().chatsFilters().folderLock()
-					.isProtected(id)) { // AyuGram: settings only after PIN.
-				Ayu::ShowVerifyFolderPinBox(
-					controller,
-					id,
-					crl::guard(button, open));
-			} else {
-				open();
-			}
+			// AyuGram: settings of a protected folder only after its PIN.
+			Ayu::OpenFolderSettings(
+				controller,
+				found->filter.id(),
+				crl::guard(button, [=](auto) { open(); }));
 		});
 		state->rows.push_back({ button, filter });
 		state->count = state->rows.size();

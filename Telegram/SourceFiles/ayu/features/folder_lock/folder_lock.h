@@ -6,6 +6,7 @@
 // Copyright @Radolyn, 2026
 #pragma once
 
+#include "ayu/features/folder_lock/folder_lock_crypto.h"
 #include "base/timer.h"
 #include "base/weak_ptr.h"
 #include "data/data_chat_filters.h"
@@ -31,6 +32,14 @@ struct UnlockResult {
 	int waitSeconds = 0;
 };
 
+// How the folder settings were opened: with the real PIN, with the second
+// (decoy) PIN, or without a PIN after it was "removed" in the decoy mode.
+enum class AccessMode {
+	Real,
+	Decoy,
+	Removed,
+};
+
 // PIN-protected chat folders of one session. While a protected folder is
 // locked its chats (by folder rules) are hidden everywhere in the client.
 class FolderLock final : public base::has_weak_ptr {
@@ -39,6 +48,10 @@ public:
 	~FolderLock();
 
 	[[nodiscard]] bool isProtected(FilterId id) const;
+	// The PIN was "removed" in the decoy mode: no PIN is asked, only the
+	// allowed chats are shown, the hidden part stays hidden.
+	[[nodiscard]] bool isPinRemoved(FilterId id) const;
+	[[nodiscard]] bool requiresPin(FilterId id) const;
 	[[nodiscard]] bool isLocked(FilterId id) const;
 	[[nodiscard]] bool isLocked(not_null<History*> history) const;
 	[[nodiscard]] bool isLocked(not_null<PeerData*> peer) const;
@@ -54,14 +67,40 @@ public:
 	[[nodiscard]] int secondsUntilNextTry(FilterId id) const;
 
 	void tryUnlock(FilterId id, QByteArray pin, Fn<void(UnlockResult)> done);
-	void verifyPin(FilterId id, QByteArray pin, Fn<void(UnlockResult)> done);
-	void setPin(FilterId id, QByteArray pin, Fn<void(bool)> done);
-	void changePin(
+	// `slot` is 0 for the real PIN, 1 for the second one.
+	void verifyPin(
 		FilterId id,
-		QByteArray oldPin,
+		QByteArray pin,
+		Fn<void(UnlockResult, int slot)> done);
+	void setPin(FilterId id, QByteArray pin, Fn<void(bool)> done);
+
+	// Settings access: the key of the checked slot lives in memory only
+	// while the folder settings box is open.
+	void beginSettings(
+		FilterId id,
+		QByteArray pin,
+		Fn<void(UnlockResult, AccessMode)> done);
+	bool beginRemovedSettings(FilterId id);
+	void endSettings(FilterId id);
+	[[nodiscard]] std::optional<AccessMode> settingsMode(FilterId id) const;
+	[[nodiscard]] bool hasDecoy(FilterId id) const;
+	[[nodiscard]] std::vector<PeerId> allowedChats(FilterId id) const;
+
+	void setupDecoy(
+		FilterId id,
+		QByteArray decoyPin,
+		std::vector<PeerId> allowed,
+		Fn<void(bool ok, bool same)> done);
+	void changeDecoyPin(FilterId id, QByteArray newPin, Fn<void(bool)> done);
+	bool setAllowedChats(FilterId id, std::vector<PeerId> allowed);
+	bool disableDecoy(FilterId id);
+	void imitateRemove(FilterId id, Fn<void(bool)> done);
+	void setPinFromRemoved(
+		FilterId id,
 		QByteArray newPin,
-		Fn<void(UnlockResult)> done);
-	void removePin(FilterId id, QByteArray pin, Fn<void(UnlockResult)> done);
+		Fn<void(bool)> done);
+	void changeRealPin(FilterId id, QByteArray newPin, Fn<void(bool)> done);
+	bool removeRealPin(FilterId id);
 
 	void lock(FilterId id);
 	void lockAll();
@@ -70,7 +109,15 @@ public:
 
 private:
 	struct Unlocked {
-		int slot = 0;
+		int slot = 0; // 0 = all chats, 1 = second bottom (allowed only).
+		base::flat_set<PeerId> allowed;
+		bool permanent = false; // The PIN was "removed".
+	};
+	struct Access {
+		AccessMode mode = AccessMode::Real;
+		QByteArray key; // Real: slot 0 key, Decoy: slot 1 key.
+		FolderLockCrypto::SecretData secret; // Real only.
+		std::vector<uint64_t> allowed; // Decoy and Removed.
 	};
 	struct Rules {
 		Data::ChatFilter::Flags flags;
@@ -88,13 +135,31 @@ private:
 	void check(
 		FilterId id,
 		QByteArray pin,
-		Fn<void(UnlockResult, int slot)> done);
+		Fn<void(UnlockResult, FolderLockCrypto::CheckResult)> done);
+	void probeRemoved();
+	void storeSlots(
+		FilterId id,
+		std::optional<QByteArray> slot0,
+		std::optional<QByteArray> slot1);
+	void resaveSecret(FilterId id);
+	void resyncDecoyKey(FilterId id);
+	void wipeAccess(FilterId id);
+	void wipeAllAccess();
+	void sealDecoy(
+		FilterId id,
+		QByteArray pin,
+		std::vector<uint64_t> allowed,
+		Fn<void(QByteArray key, QByteArray slot)> done);
+	void setUnlockedAllowed(FilterId id, const std::vector<uint64_t> &allowed);
+	bool removeUnlocked(FilterId id);
 	[[nodiscard]] uint64 userId() const;
 
 	const not_null<Main::Session*> _session;
 	base::flat_set<FilterId> _protected;
 	base::flat_map<FilterId, Unlocked> _unlocked;
 	base::flat_set<FilterId> _checking;
+	base::flat_set<FilterId> _probed;
+	base::flat_map<FilterId, Access> _access;
 	// Protection records exist but the folders (rules) aren't loaded yet:
 	// everything is treated as locked until they are.
 	bool _awaitingRules = false;

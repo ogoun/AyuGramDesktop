@@ -70,7 +70,7 @@ void RemoveComplexChatFilter::request(
 	if (strong
 		&& strong->session().data().chatsFilters().folderLock().isProtected(
 			id)) {
-		Ayu::ShowVerifyFolderPinBox(strong, id, crl::guard(widget, [=, this] {
+		Ayu::ShowVerifyRealPinBox(strong, id, crl::guard(widget, [=, this] {
 			requestVerified(widget, weak, id);
 		}));
 		return;

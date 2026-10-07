@@ -9,6 +9,12 @@
 #include "ayu/ayu_settings.h"
 #include "ayu/features/folder_lock/folder_lock.h"
 #include "ayu/features/folder_lock/folder_lock_crypto.h"
+#include "ayu/features/folder_lock/folder_lock_merge.h"
+#include "boxes/peer_list_box.h"
+#include "dialogs/dialogs_indexed_list.h"
+#include "dialogs/dialogs_main_list.h"
+#include "dialogs/dialogs_row.h"
+#include "ui/boxes/confirm_box.h"
 #include "core/application.h"
 #include "data/data_chat_filters.h"
 #include "data/data_session.h"
@@ -31,6 +37,8 @@
 #include "styles/style_boxes.h"
 #include "styles/style_layers.h"
 #include "styles/style_settings.h"
+
+#include <set>
 
 namespace Ayu {
 namespace {
@@ -129,6 +137,144 @@ void PinBox(
 	box->addButton(tr::lng_cancel(), [=] { box->closeBox(); });
 }
 
+
+// Two PIN fields with length and match checks. `save` gets the PIN and
+// callbacks to report an error (the box stays open) or to close the box.
+void NewPinBox(
+		not_null<Ui::GenericBox*> box,
+		rpl::producer<QString> title,
+		Fn<void(QByteArray, Fn<void(QString)>, Fn<void()>)> save) {
+	box->setTitle(std::move(title));
+	const auto first = AddPinField(box, tr::ayu_FolderLockNewPin());
+	const auto second = AddPinField(box, tr::ayu_FolderLockRepeatPin());
+	const auto error = AddErrorLabel(box);
+	const auto busy = std::make_shared<bool>(false);
+	const auto submit = [=] {
+		if (*busy) {
+			return;
+		}
+		const auto pin = first->getLastText();
+		if (pin.size() < FolderLockCrypto::kMinPinLength) {
+			error->setText(tr::ayu_FolderLockTooShort(tr::now));
+			first->setFocus();
+			return;
+		} else if (pin != second->getLastText()) {
+			error->setText(tr::ayu_FolderLockMismatch(tr::now));
+			second->selectAll();
+			second->setFocus();
+			return;
+		}
+		*busy = true;
+		error->setText(QString());
+		save(pin.toUtf8(), crl::guard(box, [=](QString text) {
+			*busy = false;
+			error->setText(text);
+			first->selectAll();
+			first->setFocus();
+		}), crl::guard(box, [=] {
+			box->closeBox();
+		}));
+	};
+	QObject::connect(first, &Ui::MaskedInputField::submitted, [=] {
+		second->setFocus();
+	});
+	QObject::connect(second, &Ui::MaskedInputField::submitted, submit);
+	box->setFocusCallback([=] { first->setFocusFast(); });
+	box->addButton(tr::lng_settings_save(), submit);
+	box->addButton(tr::lng_cancel(), [=] { box->closeBox(); });
+}
+
+class AllowedChatsController final : public PeerListController {
+public:
+	AllowedChatsController(
+		not_null<Main::Session*> session,
+		FilterId id,
+		std::vector<PeerId> initial)
+	: _session(session)
+	, _id(id)
+	, _initial(std::move(initial)) {
+	}
+
+	Main::Session &session() const override {
+		return *_session;
+	}
+
+	void prepare() override {
+		delegate()->peerListSetTitle(tr::ayu_FolderLockDecoyChats());
+		const auto list = _session->data().chatsFilters().chatsList(_id);
+		for (const auto &row : list->indexed()->all()) {
+			if (const auto history = row->history()) {
+				auto peerRow = std::make_unique<PeerListRow>(history->peer);
+				const auto raw = peerRow.get();
+				delegate()->peerListAppendRow(std::move(peerRow));
+				if (ranges::contains(_initial, history->peer->id)) {
+					delegate()->peerListSetRowChecked(raw, true);
+				}
+			}
+		}
+		delegate()->peerListRefreshRows();
+	}
+
+	void rowClicked(not_null<PeerListRow*> row) override {
+		delegate()->peerListSetRowChecked(row, !row->checked());
+	}
+
+	[[nodiscard]] std::vector<PeerId> checked() {
+		auto result = std::vector<PeerId>();
+		const auto count = delegate()->peerListFullRowsCount();
+		for (auto i = 0; i != count; ++i) {
+			const auto row = delegate()->peerListRowAt(i);
+			if (row->checked()) {
+				result.push_back(row->peer()->id);
+			}
+		}
+		return result;
+	}
+
+private:
+	const not_null<Main::Session*> _session;
+	const FilterId _id;
+	const std::vector<PeerId> _initial;
+
+};
+
+// The chats of the folder with check marks, `save` returns false if the
+// list can't be stored (too many chats).
+void ShowAllowedChatsBox(
+		not_null<Window::SessionController*> controller,
+		FilterId id,
+		std::vector<PeerId> initial,
+		Fn<bool(std::vector<PeerId>)> save) {
+	auto owned = std::make_unique<AllowedChatsController>(
+		&controller->session(),
+		id,
+		std::move(initial));
+	const auto raw = owned.get();
+	controller->show(Box<PeerListBox>(std::move(owned), [=](
+			not_null<PeerListBox*> box) {
+		box->addButton(tr::lng_settings_save(), [=] {
+			if (save(raw->checked())) {
+				box->closeBox();
+			} else {
+				controller->showToast(tr::ayu_FolderLockDecoyTooMany(tr::now));
+			}
+		});
+		box->addButton(tr::lng_cancel(), [=] { box->closeBox(); });
+	}));
+}
+
+// After setting a PIN in the open settings box, continue with the access
+// of that PIN, so that "Change" / "Remove" work without reopening the box.
+void ContinueWithPin(
+		not_null<FolderLock*> lock,
+		FilterId id,
+		QByteArray pin,
+		Fn<void()> done) {
+	lock->beginSettings(id, std::move(pin), [=](UnlockResult, AccessMode) {
+		done();
+	});
+}
+
 } // namespace
 
 static void CloseLockedChatsInWindowsNow(not_null<Main::Session*> session);
@@ -159,7 +305,40 @@ void ShowUnlockFolderBox(
 	}));
 }
 
-void ShowVerifyFolderPinBox(
+void OpenFolderSettings(
+		not_null<Window::SessionController*> controller,
+		FilterId id,
+		Fn<void(std::optional<AccessMode>)> open) {
+	auto &lock = Lock(controller);
+	if (!lock.isProtected(id)) {
+		open(std::nullopt);
+		return;
+	} else if (lock.isPinRemoved(id)) {
+		lock.beginRemovedSettings(id);
+		open(AccessMode::Removed);
+		return;
+	}
+	controller->show(Box([=](not_null<Ui::GenericBox*> box) {
+		PinBox(
+			box,
+			tr::ayu_FolderLockEnterPin(),
+			tr::ayu_FolderLockOpen(),
+			[=](QByteArray pin, Fn<void(QString)> fail) {
+				Lock(controller).beginSettings(id, std::move(pin), crl::guard(
+						box,
+						[=](UnlockResult result, AccessMode mode) {
+					if (result.error == UnlockError::None) {
+						box->closeBox();
+						open(mode);
+					} else {
+						fail(ErrorText(result));
+					}
+				}));
+			});
+	}));
+}
+
+void ShowVerifyRealPinBox(
 		not_null<Window::SessionController*> controller,
 		FilterId id,
 		Fn<void()> verified) {
@@ -171,10 +350,13 @@ void ShowVerifyFolderPinBox(
 			[=](QByteArray pin, Fn<void(QString)> fail) {
 				Lock(controller).verifyPin(id, std::move(pin), crl::guard(
 						box,
-						[=](UnlockResult result) {
-					if (result.error == UnlockError::None) {
+						[=](UnlockResult result, int slot) {
+					if (result.error == UnlockError::None && slot == 0) {
 						box->closeBox();
 						verified();
+					} else if (result.error == UnlockError::None) {
+						// The second PIN looks like a wrong one here.
+						fail(tr::ayu_FolderLockWrongPin(tr::now));
 					} else {
 						fail(ErrorText(result));
 					}
@@ -188,48 +370,123 @@ void ShowSetFolderPinBox(
 		FilterId id,
 		Fn<void()> done) {
 	controller->show(Box([=](not_null<Ui::GenericBox*> box) {
-		box->setTitle(tr::ayu_FolderLockSetPin());
-		const auto first = AddPinField(box, tr::ayu_FolderLockNewPin());
-		const auto second = AddPinField(box, tr::ayu_FolderLockRepeatPin());
-		const auto error = AddErrorLabel(box);
-		const auto busy = std::make_shared<bool>(false);
-		const auto save = [=] {
-			if (*busy) {
-				return;
-			}
-			const auto pin = first->getLastText();
-			if (pin.size() < FolderLockCrypto::kMinPinLength) {
-				error->setText(tr::ayu_FolderLockTooShort(tr::now));
-				first->setFocus();
-				return;
-			} else if (pin != second->getLastText()) {
-				error->setText(tr::ayu_FolderLockMismatch(tr::now));
-				second->selectAll();
-				second->setFocus();
-				return;
-			}
-			*busy = true;
-			error->setText(QString());
-			Lock(controller).setPin(id, pin.toUtf8(), crl::guard(
-					box,
-					[=](bool ok) {
-				*busy = false;
-				if (ok) {
-					box->closeBox();
-					done();
-				} else {
-					error->setText(tr::ayu_FolderLockFailed(tr::now));
+		NewPinBox(box, tr::ayu_FolderLockSetPin(), [=](
+				QByteArray pin,
+				Fn<void(QString)> fail,
+				Fn<void()> close) {
+			const auto lock = &Lock(controller);
+			auto copy = pin;
+			lock->setPin(id, std::move(pin), [=](bool ok) mutable {
+				if (!ok) {
+					FolderLockCrypto::Wipe(copy);
+					fail(tr::ayu_FolderLockFailed(tr::now));
+					return;
 				}
-			}));
-		};
-		QObject::connect(first, &Ui::MaskedInputField::submitted, [=] {
-			second->setFocus();
+				close();
+				ContinueWithPin(lock, id, std::move(copy), done);
+			});
 		});
-		QObject::connect(second, &Ui::MaskedInputField::submitted, save);
-		box->setFocusCallback([=] { first->setFocusFast(); });
-		box->addButton(tr::lng_settings_save(), save);
-		box->addButton(tr::lng_cancel(), [=] { box->closeBox(); });
 	}));
+}
+
+FolderEdit PrepareFolderEdit(
+		not_null<Main::Session*> session,
+		const Data::ChatFilter &real) {
+	const auto lock = &session->data().chatsFilters().folderLock();
+	const auto id = real.id();
+	const auto mode = lock->settingsMode(id);
+	if (!mode || *mode == AccessMode::Real) {
+		return {
+			.shown = real,
+			.restore = [](const Data::ChatFilter &filter) { return filter; },
+		};
+	}
+	using Flag = Data::ChatFilter::Flag;
+	const auto owner = &session->data();
+	auto allowedSet = std::set<uint64_t>();
+	auto shownAlways = base::flat_set<not_null<History*>>();
+	auto typeMatched = std::set<uint64_t>();
+	for (const auto peerId : lock->allowedChats(id)) {
+		const auto history = owner->history(peerId);
+		if (real.matchesRules(history)) {
+			allowedSet.insert(peerId.value);
+			shownAlways.emplace(history);
+			if (real.matchesByType(history)) {
+				typeMatched.insert(peerId.value);
+			}
+		}
+	}
+	auto shownPinned = std::vector<not_null<History*>>();
+	for (const auto &history : real.pinned()) {
+		if (shownAlways.contains(history)) {
+			shownPinned.push_back(history);
+		}
+	}
+	auto shown = Data::ChatFilter(
+		id,
+		real.title(),
+		real.iconEmoji(),
+		real.colorIndex(),
+		real.flags() & ~Flag(Flag::RulesMask),
+		shownAlways,
+		shownPinned,
+		{});
+	const auto restore = [=](const Data::ChatFilter &edited) {
+		const auto toIds = [](const auto &histories) {
+			auto result = std::set<uint64_t>();
+			for (const auto &history : histories) {
+				result.insert(history->peer->id.value);
+			}
+			return result;
+		};
+		auto realPinned = std::vector<uint64_t>();
+		for (const auto &history : real.pinned()) {
+			realPinned.push_back(history->peer->id.value);
+		}
+		const auto merged = FolderLockMerge::MergeDecoyEdit({
+			.always = toIds(real.always()),
+			.never = toIds(real.never()),
+			.pinned = std::move(realPinned),
+		}, {
+			.allowedOld = allowedSet,
+			.shownAlways = toIds(edited.always()),
+			.shownNever = toIds(edited.never()),
+			.typeMatched = typeMatched,
+		});
+		const auto toHistories = [&](const std::set<uint64_t> &ids) {
+			auto result = base::flat_set<not_null<History*>>();
+			for (const auto value : ids) {
+				result.emplace(owner->history(PeerId(value)));
+			}
+			return result;
+		};
+		auto pinned = std::vector<not_null<History*>>();
+		for (const auto value : merged.pinned) {
+			pinned.push_back(owner->history(PeerId(value)));
+		}
+		// Chats pinned in the fake view go first, hidden pinned ones after.
+		for (const auto &history : ranges::views::reverse(edited.pinned())) {
+			if (!ranges::contains(pinned, history)) {
+				pinned.insert(begin(pinned), history);
+			}
+		}
+		auto allowed = std::vector<PeerId>();
+		for (const auto value : merged.allowed) {
+			allowed.push_back(PeerId(value));
+		}
+		lock->setAllowedChats(id, std::move(allowed));
+		return Data::ChatFilter(
+			id,
+			edited.title(),
+			edited.iconEmoji(),
+			edited.colorIndex(),
+			(real.flags() & Flag::RulesMask)
+				| (edited.flags() & ~Flag(Flag::RulesMask)),
+			toHistories(merged.always),
+			std::move(pinned),
+			toHistories(merged.never));
+	};
+	return { .shown = std::move(shown), .restore = restore, .fake = true };
 }
 
 void AddFolderProtectionSection(
@@ -238,14 +495,25 @@ void AddFolderProtectionSection(
 		FilterId id,
 		not_null<Ui::Checkbox*> hideFromAll) {
 	const auto lock = &Lock(controller);
+	const auto shownProtected = [=] {
+		// With a "removed" PIN the folder looks unprotected.
+		return lock->isProtected(id)
+			&& (lock->settingsMode(id) != AccessMode::Removed);
+	};
 	const auto protectedState = container->lifetime().make_state<
-		rpl::variable<bool>>(lock->isProtected(id));
+		rpl::variable<bool>>(shownProtected());
+	const auto realState = container->lifetime().make_state<
+		rpl::variable<bool>>(lock->settingsMode(id) == AccessMode::Real);
+	const auto decoyState = container->lifetime().make_state<
+		rpl::variable<bool>>(lock->hasDecoy(id));
 	const auto hidden = container->lifetime().make_state<
 		rpl::variable<bool>>(hideFromAll->checked());
 	const auto autolockLabel = container->lifetime().make_state<
 		rpl::variable<QString>>(AutolockText(lock->autolockMinutes(id)));
 	const auto refresh = [=] {
-		*protectedState = lock->isProtected(id);
+		*protectedState = shownProtected();
+		*realState = (lock->settingsMode(id) == AccessMode::Real);
+		*decoyState = lock->hasDecoy(id);
 		*autolockLabel = AutolockText(lock->autolockMinutes(id));
 	};
 	lock->lockChanges() | rpl::on_next(refresh, container->lifetime());
@@ -285,9 +553,44 @@ void AddFolderProtectionSection(
 		tr::ayu_FolderLockRemovePin(),
 		st::settingsAttentionButton);
 
+	// Second bottom: only with the real PIN.
+	const auto decoyWrap = manage->add(
+		object_ptr<Ui::SlideWrap<Ui::VerticalLayout>>(
+			manage,
+			object_ptr<Ui::VerticalLayout>(manage)));
+	const auto decoy = decoyWrap->entity();
+	Ui::AddSkip(decoy);
+	Ui::AddSubsectionTitle(decoy, tr::ayu_FolderLockDecoy());
+	const auto setupWrap = decoy->add(
+		object_ptr<Ui::SlideWrap<Ui::VerticalLayout>>(
+			decoy,
+			object_ptr<Ui::VerticalLayout>(decoy)));
+	const auto setup = Settings::AddButtonWithIcon(
+		setupWrap->entity(),
+		tr::ayu_FolderLockDecoySetup(),
+		st::settingsButtonNoIcon);
+	const auto decoyManageWrap = decoy->add(
+		object_ptr<Ui::SlideWrap<Ui::VerticalLayout>>(
+			decoy,
+			object_ptr<Ui::VerticalLayout>(decoy)));
+	const auto decoyManage = decoyManageWrap->entity();
+	const auto decoyChange = Settings::AddButtonWithIcon(
+		decoyManage,
+		tr::ayu_FolderLockDecoyChangePin(),
+		st::settingsButtonNoIcon);
+	const auto decoyChats = Settings::AddButtonWithIcon(
+		decoyManage,
+		tr::ayu_FolderLockDecoyChats(),
+		st::settingsButtonNoIcon);
+	const auto decoyOff = Settings::AddButtonWithIcon(
+		decoyManage,
+		tr::ayu_FolderLockDecoyOff(),
+		st::settingsAttentionButton);
+	Ui::AddDividerText(decoy, tr::ayu_FolderLockDecoyAbout());
+
 	hideFromAll->checkedChanges(
 	) | rpl::on_next([=](bool checked) {
-		if (!checked && protectedState->current()) {
+		if (!checked && lock->isProtected(id)) {
 			hideFromAll->setChecked(true);
 			controller->showToast(tr::ayu_FolderLockRemoveFirst(tr::now));
 			return;
@@ -301,8 +604,33 @@ void AddFolderProtectionSection(
 		protectedState->value()
 	) | rpl::map(rpl::mappers::_1 && !rpl::mappers::_2));
 	manageWrap->toggleOn(protectedState->value());
+	decoyWrap->toggleOn(realState->value());
+	setupWrap->toggleOn(decoyState->value() | rpl::map(!rpl::mappers::_1));
+	decoyManageWrap->toggleOn(decoyState->value());
 
+	const auto failText = tr::ayu_FolderLockFailed(tr::now);
 	setPin->setClickedCallback([=] {
+		if (lock->settingsMode(id) == AccessMode::Removed) {
+			controller->show(Box([=](not_null<Ui::GenericBox*> box) {
+				NewPinBox(box, tr::ayu_FolderLockSetPin(), [=](
+						QByteArray pin,
+						Fn<void(QString)> fail,
+						Fn<void()> close) {
+					auto copy = pin;
+					lock->setPinFromRemoved(id, std::move(pin), [=](
+							bool ok) mutable {
+						if (!ok) {
+							FolderLockCrypto::Wipe(copy);
+							fail(failText);
+							return;
+						}
+						close();
+						ContinueWithPin(lock, id, std::move(copy), refresh);
+					});
+				});
+			}));
+			return;
+		}
 		ShowSetFolderPinBox(controller, id, [=] {
 			// A PIN requires "Don't show chats in All Chats", keep it even
 			// if the edit folder box is cancelled.
@@ -314,28 +642,52 @@ void AddFolderProtectionSection(
 		});
 	});
 	change->setClickedCallback([=] {
-		ShowVerifyFolderPinBox(controller, id, [=] {
-			ShowSetFolderPinBox(controller, id, refresh);
-		});
+		const auto mode = lock->settingsMode(id);
+		if (!mode || *mode == AccessMode::Removed) {
+			return;
+		}
+		const auto decoyMode = (*mode == AccessMode::Decoy);
+		controller->show(Box([=](not_null<Ui::GenericBox*> box) {
+			NewPinBox(box, tr::ayu_FolderLockChangePin(), [=](
+					QByteArray pin,
+					Fn<void(QString)> fail,
+					Fn<void()> close) {
+				const auto done = [=](bool ok) {
+					if (ok) {
+						close();
+						refresh();
+					} else {
+						fail(failText);
+					}
+				};
+				if (decoyMode) {
+					lock->changeDecoyPin(id, std::move(pin), done);
+				} else {
+					lock->changeRealPin(id, std::move(pin), done);
+				}
+			});
+		}));
 	});
 	remove->setClickedCallback([=] {
-		controller->show(Box([=](not_null<Ui::GenericBox*> box) {
-			PinBox(
-				box,
-				tr::ayu_FolderLockRemovePin(),
-				tr::ayu_FolderLockRemovePin(),
-				[=](QByteArray pin, Fn<void(QString)> fail) {
-					lock->removePin(id, std::move(pin), crl::guard(
-							box,
-							[=](UnlockResult result) {
-						if (result.error == UnlockError::None) {
-							box->closeBox();
-							refresh();
-						} else {
-							fail(ErrorText(result));
-						}
-					}));
-				});
+		const auto mode = lock->settingsMode(id);
+		if (!mode || *mode == AccessMode::Removed) {
+			return;
+		}
+		const auto decoyMode = (*mode == AccessMode::Decoy);
+		controller->show(Ui::MakeConfirmBox({
+			.text = tr::ayu_FolderLockRemovePin(),
+			.confirmed = [=](Fn<void()> &&close) {
+				close();
+				if (decoyMode) {
+					// Looks like the PIN is gone, the hidden part stays.
+					lock->imitateRemove(id, [=](bool) { refresh(); });
+				} else {
+					lock->removeRealPin(id);
+					refresh();
+				}
+			},
+			.confirmText = tr::ayu_FolderLockRemovePin(),
+			.confirmStyle = &st::attentionBoxButton,
 		}));
 	});
 	autolock->setClickedCallback([=] {
@@ -356,6 +708,65 @@ void AddFolderProtectionSection(
 				lock->setAutolockMinutes(id, kAutolockOptions[index]);
 				refresh();
 			},
+		}));
+	});
+	setup->setClickedCallback([=] {
+		controller->show(Box([=](not_null<Ui::GenericBox*> box) {
+			NewPinBox(box, tr::ayu_FolderLockDecoyPin(), [=](
+					QByteArray pin,
+					Fn<void(QString)> fail,
+					Fn<void()> close) {
+				lock->setupDecoy(id, std::move(pin), {}, [=](
+						bool ok,
+						bool same) {
+					if (same) {
+						fail(tr::ayu_FolderLockDecoySame(tr::now));
+					} else if (!ok) {
+						fail(failText);
+					} else {
+						close();
+						refresh();
+						ShowAllowedChatsBox(controller, id, {}, [=](
+								std::vector<PeerId> allowed) {
+							return lock->setAllowedChats(id, std::move(allowed));
+						});
+					}
+				});
+			});
+		}));
+	});
+	decoyChange->setClickedCallback([=] {
+		controller->show(Box([=](not_null<Ui::GenericBox*> box) {
+			NewPinBox(box, tr::ayu_FolderLockDecoyChangePin(), [=](
+					QByteArray pin,
+					Fn<void(QString)> fail,
+					Fn<void()> close) {
+				lock->changeDecoyPin(id, std::move(pin), [=](bool ok) {
+					if (ok) {
+						close();
+					} else {
+						fail(failText);
+					}
+				});
+			});
+		}));
+	});
+	decoyChats->setClickedCallback([=] {
+		ShowAllowedChatsBox(controller, id, lock->allowedChats(id), [=](
+				std::vector<PeerId> allowed) {
+			return lock->setAllowedChats(id, std::move(allowed));
+		});
+	});
+	decoyOff->setClickedCallback([=] {
+		controller->show(Ui::MakeConfirmBox({
+			.text = tr::ayu_FolderLockDecoyOff(),
+			.confirmed = [=](Fn<void()> &&close) {
+				close();
+				lock->disableDecoy(id);
+				refresh();
+			},
+			.confirmText = tr::ayu_FolderLockDecoyOff(),
+			.confirmStyle = &st::attentionBoxButton,
 		}));
 	});
 }
