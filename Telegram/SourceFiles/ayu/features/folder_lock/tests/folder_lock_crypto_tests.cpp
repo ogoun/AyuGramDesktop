@@ -203,6 +203,14 @@ void TestMerge() {
 	AYU_CHECK((result.never == std::set<uint64_t>{ 4, 20 }));
 	AYU_CHECK((result.pinned == std::vector<uint64_t>{ 10 }));
 	AYU_CHECK((result.allowed == std::set<uint64_t>{ 1, 5 }));
+
+	// Allowed chats outside of the folder rules now are kept (they come back
+	// when the folder gets them again).
+	auto withHidden = edit;
+	withHidden.allowedOutside = { 30 };
+	const auto kept = MergeDecoyEdit(real, withHidden);
+	AYU_CHECK((kept.allowed == std::set<uint64_t>{ 1, 5, 30 }));
+	AYU_CHECK(!kept.always.contains(30));
 }
 
 void TestWipe() {

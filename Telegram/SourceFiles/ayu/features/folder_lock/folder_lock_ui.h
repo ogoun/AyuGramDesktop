@@ -54,10 +54,12 @@ struct FolderEdit {
 	not_null<Main::Session*> session,
 	const Data::ChatFilter &real);
 
-// Asks a new PIN twice and sets it.
+// Asks a new PIN twice and sets it, the access of the new PIN goes to the
+// settings box `owner`.
 void ShowSetFolderPinBox(
 	not_null<Window::SessionController*> controller,
 	FilterId id,
+	not_null<QWidget*> owner,
 	Fn<void()> done);
 
 // "Protection" group of the edit folder box, under "Don't show chats in All

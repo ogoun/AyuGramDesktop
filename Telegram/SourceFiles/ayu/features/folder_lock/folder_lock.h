@@ -81,6 +81,8 @@ public:
 		QByteArray pin,
 		Fn<void(UnlockResult, AccessMode)> done);
 	bool beginRemovedSettings(FilterId id);
+	// The settings box took the access (others are dropped soon).
+	void attachSettings(FilterId id);
 	void endSettings(FilterId id);
 	[[nodiscard]] std::optional<AccessMode> settingsMode(FilterId id) const;
 	[[nodiscard]] bool hasDecoy(FilterId id) const;
@@ -91,7 +93,10 @@ public:
 		QByteArray decoyPin,
 		std::vector<PeerId> allowed,
 		Fn<void(bool ok, bool same)> done);
-	void changeDecoyPin(FilterId id, QByteArray newPin, Fn<void(bool)> done);
+	void changeDecoyPin(
+		FilterId id,
+		QByteArray newPin,
+		Fn<void(bool ok, bool same)> done);
 	bool setAllowedChats(FilterId id, std::vector<PeerId> allowed);
 	bool disableDecoy(FilterId id);
 	void imitateRemove(FilterId id, Fn<void(bool)> done);
@@ -99,8 +104,13 @@ public:
 		FilterId id,
 		QByteArray newPin,
 		Fn<void(bool)> done);
-	void changeRealPin(FilterId id, QByteArray newPin, Fn<void(bool)> done);
+	void changeRealPin(
+		FilterId id,
+		QByteArray newPin,
+		Fn<void(bool ok, bool same)> done);
 	bool removeRealPin(FilterId id);
+	// A real-only PIN check got the second PIN: counts as a wrong one.
+	void countWrongPin(FilterId id);
 
 	void lock(FilterId id);
 	void lockAll();
@@ -118,6 +128,8 @@ private:
 		QByteArray key; // Real: slot 0 key, Decoy: slot 1 key.
 		FolderLockCrypto::SecretData secret; // Real only.
 		std::vector<uint64_t> allowed; // Decoy and Removed.
+		crl::time created = 0;
+		bool attached = false; // Taken by an open settings box.
 	};
 	struct Rules {
 		Data::ChatFilter::Flags flags;
@@ -142,6 +154,9 @@ private:
 		std::optional<QByteArray> slot0,
 		std::optional<QByteArray> slot1);
 	void resaveSecret(FilterId id);
+	[[nodiscard]] std::optional<QByteArray> sealSecret(FilterId id) const;
+	// A PIN change without the real PIN is an attempt, like a wrong PIN.
+	[[nodiscard]] bool consumeTry(FilterId id);
 	void resyncDecoyKey(FilterId id);
 	void wipeAccess(FilterId id);
 	void wipeAllAccess();
@@ -159,6 +174,7 @@ private:
 	base::flat_map<FilterId, Unlocked> _unlocked;
 	base::flat_set<FilterId> _checking;
 	base::flat_set<FilterId> _probed;
+	bool _probing = false;
 	base::flat_map<FilterId, Access> _access;
 	// Protection records exist but the folders (rules) aren't loaded yet:
 	// everything is treated as locked until they are.

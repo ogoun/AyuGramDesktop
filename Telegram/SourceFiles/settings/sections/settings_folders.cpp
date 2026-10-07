@@ -127,10 +127,12 @@ struct FilterRow {
 		not_null<::Main::Session*> session,
 		const Data::ChatFilter &filter) {
 	auto result = 0;
+	// AyuGram: chats hidden by a locked folder are not counted.
+	const auto &lock = session->data().chatsFilters().folderLock();
 	const auto addList = [&](not_null<Dialogs::MainList*> list) {
 		for (const auto &entry : list->indexed()->all()) {
 			if (const auto history = entry->history()) {
-				if (filter.contains(history)) {
+				if (filter.contains(history) && !lock.isLocked(history)) {
 					++result;
 				}
 			}
@@ -157,7 +159,16 @@ struct FilterRow {
 				&& i->always() == filter.always()
 				&& i->never() == filter.never()))) {
 		const auto chats = session->data().chatsFilters().chatsList(id);
-		return chats->indexed()->size();
+		const auto &lock = session->data().chatsFilters().folderLock();
+		if (!lock.isProtected(id)) {
+			return chats->indexed()->size();
+		}
+		// AyuGram: the real count of a protected folder is not shown.
+		return int(ranges::count_if(chats->indexed()->all(), [&](
+				not_null<Dialogs::Row*> row) {
+			const auto history = row->history();
+			return history && !lock.isLocked(not_null(history));
+		}));
 	}
 	return CountFilterChats(session, filter);
 }

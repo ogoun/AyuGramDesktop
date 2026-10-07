@@ -25,6 +25,7 @@ struct Edit {
 	std::set<uint64_t> shownAlways;
 	std::set<uint64_t> shownNever;
 	std::set<uint64_t> typeMatched; // In the folder by type, not explicitly.
+	std::set<uint64_t> allowedOutside; // Allowed, but not in the folder now.
 };
 
 struct Result {

@@ -9221,5 +9221,6 @@ https://github.com/telegramdesktop/tdesktop/blob/master/LEGAL
 "ayu_FolderLockDecoyOff" = "Turn off second bottom";
 "ayu_FolderLockDecoyPin" = "Second PIN";
 "ayu_FolderLockDecoySame" = "The second PIN must differ from the main one.";
+"ayu_FolderLockRealSame" = "The main PIN must differ from the second one.";
 "ayu_FolderLockDecoyAbout" = "With the second PIN only the allowed chats of this folder are shown, its settings look like a folder with one PIN.";
 "ayu_FolderLockDecoyTooMany" = "Too many chats selected.";

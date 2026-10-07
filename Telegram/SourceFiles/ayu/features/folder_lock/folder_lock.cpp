@@ -307,7 +307,9 @@ void FolderLock::check(
 				done({ .error = UnlockError::Failed }, CheckResult());
 				return;
 			} else if (result.ok) {
-				if (record->badTries) {
+				// The second PIN may be known to a coercer: it must not reset
+				// the counter of tries for the real one.
+				if (record->badTries && result.slot == 0) {
 					record->badTries = 0;
 					record->lastBadTry = 0;
 					settings.setFolderProtection(userId(), id, record);
@@ -359,6 +361,13 @@ void FolderLock::verifyPin(
 }
 
 void FolderLock::setPin(FilterId id, QByteArray pin, Fn<void(bool)> done) {
+	// Never over an existing record: it would destroy the real slot (and in
+	// the "removed" state the typed PIN would become the real one).
+	if (AyuSettings::getInstance().folderProtection(userId(), id)) {
+		Wipe(pin);
+		done(false);
+		return;
+	}
 	const auto weak = base::make_weak(this);
 	const auto minutes = autolockMinutes(id);
 	crl::async([=, pin = std::move(pin)]() mutable {
@@ -379,18 +388,22 @@ void FolderLock::setPin(FilterId id, QByteArray pin, Fn<void(bool)> done) {
 			&& (record.slots[0].size() == kSlotSize)
 			&& (record.slots[1].size() == kSlotSize);
 		crl::on_main(weak, [=] {
-			if (ok) {
-				AyuSettings::getInstance().setFolderProtection(
-					userId(),
-					id,
-					record);
+			auto &settings = AyuSettings::getInstance();
+			const auto stored = ok
+				&& !settings.folderProtection(userId(), id);
+			if (stored) {
+				settings.setFolderProtection(userId(), id, record);
 			}
-			done(ok);
+			done(stored);
 		});
 	});
 }
 
 void FolderLock::probeRemoved() {
+	// One at a time: each probe takes the memory of a full KDF run.
+	if (_probing) {
+		return;
+	}
 	for (const auto id : _protected) {
 		if (_probed.contains(id) || isPinRemoved(id)) {
 			continue;
@@ -406,11 +419,29 @@ void FolderLock::probeRemoved() {
 		const auto salt = record->salt;
 		const auto params = ParamsOf(*record);
 		const auto slots = record->slots;
+		_probing = true;
 		crl::async([=] {
 			auto result = CheckPin(QByteArray(), salt, params, id, slots);
 			crl::on_main(weak, [=]() mutable {
+				_probing = false;
 				Wipe(result.key);
-				if (!result.ok || result.slot != 1 || !isProtected(id)) {
+				// The record could change while the KDF was running.
+				const auto now = AyuSettings::getInstance().folderProtection(
+					userId(),
+					id);
+				const auto stale = !now || (now->slots[1] != slots[1]);
+				const auto u = _unlocked.find(id);
+				const auto realOpen = (u != end(_unlocked))
+					&& (u->second.slot == 0);
+				if (!result.ok
+					|| result.slot != 1
+					|| !isProtected(id)
+					|| stale
+					|| realOpen) {
+					if (stale) {
+						_probed.remove(id);
+					}
+					probeRemoved();
 					return;
 				}
 				auto unlocked = Unlocked{ .slot = 1, .permanent = true };
@@ -421,8 +452,10 @@ void FolderLock::probeRemoved() {
 				}
 				_unlocked[id] = std::move(unlocked);
 				applyChanged(false);
+				probeRemoved();
 			});
 		});
+		return;
 	}
 }
 
@@ -445,17 +478,42 @@ void FolderLock::storeSlots(
 	settings.setFolderProtection(userId(), id, std::move(record));
 }
 
-void FolderLock::resaveSecret(FilterId id) {
+std::optional<QByteArray> FolderLock::sealSecret(FilterId id) const {
 	const auto i = _access.find(id);
 	if (i == end(_access) || i->second.mode != AccessMode::Real) {
-		return;
+		return std::nullopt;
 	}
 	auto slot = SealSlot(i->second.key, MakeAad(id), SlotContent{
 		.role = Role::Full,
 		.data = SerializeSecret(i->second.secret),
 	});
-	if (slot.size() == kSlotSize) {
+	if (slot.size() != kSlotSize) {
+		return std::nullopt;
+	}
+	return slot;
+}
+
+void FolderLock::resaveSecret(FilterId id) {
+	if (auto slot = sealSecret(id)) {
 		storeSlots(id, std::move(slot), std::nullopt);
+	}
+}
+
+bool FolderLock::consumeTry(FilterId id) {
+	if (secondsUntilNextTry(id) > 0) {
+		return false;
+	}
+	countWrongPin(id);
+	return true;
+}
+
+void FolderLock::countWrongPin(FilterId id) {
+	auto &settings = AyuSettings::getInstance();
+	auto record = settings.folderProtection(userId(), id);
+	if (record) {
+		++record->badTries;
+		record->lastBadTry = base::unixtime::now();
+		settings.setFolderProtection(userId(), id, std::move(record));
 	}
 }
 
@@ -533,7 +591,10 @@ void FolderLock::beginSettings(
 			done(result, AccessMode::Real);
 			return;
 		}
-		auto access = Access{ .key = std::move(checked.key) };
+		auto access = Access{
+			.key = std::move(checked.key),
+			.created = crl::now(),
+		};
 		if (checked.slot == 0) {
 			access.mode = AccessMode::Real;
 			access.secret = ParseSecret(checked.content.data).value_or(
@@ -558,13 +619,23 @@ bool FolderLock::beginRemovedSettings(FilterId id) {
 		return false;
 	}
 	// The empty PIN key is not a secret, it is derived in the operations.
-	auto access = Access{ .mode = AccessMode::Removed };
+	auto access = Access{
+		.mode = AccessMode::Removed,
+		.created = crl::now(),
+	};
 	for (const auto &peer : _unlocked[id].allowed) {
 		access.allowed.push_back(peer.value);
 	}
 	wipeAccess(id);
 	_access.emplace(id, std::move(access));
 	return true;
+}
+
+void FolderLock::attachSettings(FilterId id) {
+	const auto i = _access.find(id);
+	if (i != end(_access)) {
+		i->second.attached = true;
+	}
 }
 
 void FolderLock::endSettings(FilterId id) {
@@ -695,8 +766,7 @@ void FolderLock::setupDecoy(
 				Wipe(i->second.secret.decoyKey);
 				i->second.secret.decoyKey = std::move(key);
 				i->second.secret.allowed = ids;
-				storeSlots(id, std::nullopt, std::move(slot));
-				resaveSecret(id);
+				storeSlots(id, sealSecret(id), std::move(slot));
 				done(true, false);
 			});
 		});
@@ -706,37 +776,70 @@ void FolderLock::setupDecoy(
 void FolderLock::changeDecoyPin(
 		FilterId id,
 		QByteArray newPin,
-		Fn<void(bool)> done) {
+		Fn<void(bool ok, bool same)> done) {
 	const auto i = _access.find(id);
+	const auto record = AyuSettings::getInstance().folderProtection(
+		userId(),
+		id);
 	if (i == end(_access)
+		|| !record
 		|| (i->second.mode != AccessMode::Real
-			&& i->second.mode != AccessMode::Decoy)) {
+			&& i->second.mode != AccessMode::Decoy)
+		|| (i->second.mode == AccessMode::Decoy && !consumeTry(id))) {
 		Wipe(newPin);
-		done(false);
+		done(false, false);
 		return;
 	}
-	const auto allowed = (i->second.mode == AccessMode::Real)
+	const auto mode = i->second.mode;
+	const auto allowed = (mode == AccessMode::Real)
 		? i->second.secret.allowed
 		: i->second.allowed;
-	sealDecoy(id, std::move(newPin), allowed, [=](
-			QByteArray key,
-			QByteArray slot) mutable {
-		const auto i = _access.find(id);
-		if (slot.size() != kSlotSize || i == end(_access)) {
-			Wipe(key);
-			done(false);
-			return;
-		}
-		storeSlots(id, std::nullopt, std::move(slot));
-		if (i->second.mode == AccessMode::Real) {
-			Wipe(i->second.secret.decoyKey);
-			i->second.secret.decoyKey = std::move(key);
-			resaveSecret(id);
-		} else {
-			Wipe(i->second.key);
-			i->second.key = std::move(key);
-		}
-		done(true);
+	const auto seal = [=](QByteArray pin) {
+		sealDecoy(id, std::move(pin), allowed, [=](
+				QByteArray key,
+				QByteArray slot) mutable {
+			const auto i = _access.find(id);
+			if (slot.size() != kSlotSize
+				|| i == end(_access)
+				|| i->second.mode != mode) {
+				Wipe(key);
+				done(false, false);
+				return;
+			}
+			if (mode == AccessMode::Real) {
+				Wipe(i->second.secret.decoyKey);
+				i->second.secret.decoyKey = std::move(key);
+				storeSlots(id, sealSecret(id), std::move(slot));
+			} else {
+				Wipe(i->second.key);
+				i->second.key = std::move(key);
+				storeSlots(id, std::nullopt, std::move(slot));
+			}
+			done(true, false);
+		});
+	};
+	if (mode == AccessMode::Decoy) {
+		// Nothing is told about the real PIN here.
+		seal(std::move(newPin));
+		return;
+	}
+	// The second PIN must not open the real slot.
+	const auto weak = base::make_weak(this);
+	const auto salt = record->salt;
+	const auto params = ParamsOf(*record);
+	const auto slot0 = record->slots[0];
+	crl::async([=, pin = std::move(newPin)]() mutable {
+		auto realKey = DeriveKey(pin, salt, 0, params);
+		const auto same = OpenSlot(realKey, MakeAad(id), slot0).has_value();
+		Wipe(realKey);
+		crl::on_main(weak, [=]() mutable {
+			if (same) {
+				Wipe(pin);
+				done(false, true);
+			} else {
+				seal(std::move(pin));
+			}
+		});
 	});
 }
 
@@ -765,8 +868,7 @@ bool FolderLock::setAllowedChats(
 			return false;
 		}
 		i->second.secret.allowed = ids;
-		storeSlots(id, std::nullopt, std::move(slot));
-		resaveSecret(id);
+		storeSlots(id, sealSecret(id), std::move(slot));
 	} break;
 	case AccessMode::Decoy: {
 		auto slot = SealSlot(i->second.key, MakeAad(id), content);
@@ -781,7 +883,11 @@ bool FolderLock::setAllowedChats(
 		i->second.allowed = ids;
 		sealDecoy(id, QByteArray(), ids, [=](QByteArray key, QByteArray slot) {
 			Wipe(key);
-			if (slot.size() == kSlotSize) {
+			const auto i = _access.find(id);
+			if (slot.size() == kSlotSize
+				&& i != end(_access)
+				&& i->second.mode == AccessMode::Removed
+				&& isPinRemoved(id)) {
 				storeSlots(id, std::nullopt, std::move(slot));
 			}
 		});
@@ -799,8 +905,7 @@ bool FolderLock::disableDecoy(FilterId id) {
 	Wipe(i->second.secret.decoyKey);
 	i->second.secret.allowed.clear();
 	// An unused slot is random again: nothing tells it was ever used.
-	storeSlots(id, std::nullopt, RandomBytes(kSlotSize));
-	resaveSecret(id);
+	storeSlots(id, sealSecret(id), RandomBytes(kSlotSize));
 	return true;
 }
 
@@ -838,7 +943,9 @@ void FolderLock::setPinFromRemoved(
 		QByteArray newPin,
 		Fn<void(bool)> done) {
 	const auto i = _access.find(id);
-	if (i == end(_access) || i->second.mode != AccessMode::Removed) {
+	if (i == end(_access)
+		|| i->second.mode != AccessMode::Removed
+		|| !consumeTry(id)) {
 		Wipe(newPin);
 		done(false);
 		return;
@@ -848,7 +955,10 @@ void FolderLock::setPinFromRemoved(
 			QByteArray key,
 			QByteArray slot) mutable {
 		Wipe(key);
-		if (slot.size() != kSlotSize) {
+		const auto i = _access.find(id);
+		if (slot.size() != kSlotSize
+			|| i == end(_access)
+			|| i->second.mode != AccessMode::Removed) {
 			done(false);
 			return;
 		}
@@ -864,21 +974,30 @@ void FolderLock::setPinFromRemoved(
 void FolderLock::changeRealPin(
 		FilterId id,
 		QByteArray newPin,
-		Fn<void(bool)> done) {
+		Fn<void(bool ok, bool same)> done) {
 	const auto i = _access.find(id);
 	const auto record = AyuSettings::getInstance().folderProtection(
 		userId(),
 		id);
 	if (i == end(_access) || i->second.mode != AccessMode::Real || !record) {
 		Wipe(newPin);
-		done(false);
+		done(false, false);
 		return;
 	}
 	const auto weak = base::make_weak(this);
 	const auto salt = record->salt;
 	const auto params = ParamsOf(*record);
 	const auto secret = SerializeSecret(i->second.secret);
+	const auto slot1 = record->slots[1];
 	crl::async([=, pin = std::move(newPin)]() mutable {
+		auto decoyKey = DeriveKey(pin, salt, 1, params);
+		const auto same = OpenSlot(decoyKey, MakeAad(id), slot1).has_value();
+		Wipe(decoyKey);
+		if (same) {
+			Wipe(pin);
+			crl::on_main(weak, [=] { done(false, true); });
+			return;
+		}
 		// The salt stays, so the second slot keeps working.
 		auto key = DeriveKey(pin, salt, 0, params);
 		Wipe(pin);
@@ -890,15 +1009,17 @@ void FolderLock::changeRealPin(
 			});
 		crl::on_main(weak, [=]() mutable {
 			const auto i = _access.find(id);
-			if (slot.size() != kSlotSize || i == end(_access)) {
+			if (slot.size() != kSlotSize
+				|| i == end(_access)
+				|| i->second.mode != AccessMode::Real) {
 				Wipe(key);
-				done(false);
+				done(false, false);
 				return;
 			}
 			storeSlots(id, std::move(slot), std::nullopt);
 			Wipe(i->second.key);
 			i->second.key = std::move(key);
-			done(true);
+			done(true, false);
 		});
 	});
 }
@@ -932,6 +1053,7 @@ void FolderLock::lock(FilterId id) {
 }
 
 void FolderLock::lockAll() {
+	const auto hadAccess = !_access.empty();
 	wipeAllAccess();
 	// Folders with a "removed" PIN have nothing to lock.
 	auto changed = false;
@@ -945,6 +1067,8 @@ void FolderLock::lockAll() {
 	}
 	if (changed) {
 		applyChanged(true);
+	} else if (hadAccess) {
+		_lockChanges.fire({}); // Open settings boxes lose their access.
 	}
 }
 
@@ -993,6 +1117,16 @@ void FolderLock::rulesChanged() {
 }
 
 void FolderLock::checkAutolock() {
+	auto orphans = std::vector<FilterId>();
+	for (const auto &[id, access] : _access) {
+		if (!access.attached
+			&& crl::now() - access.created >= kAutolockCheckPeriod) {
+			orphans.push_back(id);
+		}
+	}
+	for (const auto id : orphans) {
+		wipeAccess(id);
+	}
 	if (_unlocked.empty()) {
 		return;
 	}

@@ -44,6 +44,9 @@ Result MergeDecoyEdit(const Real &real, const Edit &edit) {
 		}
 	}
 	result.allowed = edit.shownAlways;
+	result.allowed.insert(
+		begin(edit.allowedOutside),
+		end(edit.allowedOutside));
 	return result;
 }
 

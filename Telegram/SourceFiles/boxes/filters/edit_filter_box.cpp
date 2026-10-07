@@ -608,6 +608,7 @@ void EditFilterBox(
 	const auto ayuFake = ayuMode && (*ayuMode != Ayu::AccessMode::Real);
 	if (filter.id()) {
 		const auto filterId = filter.id();
+		session->data().chatsFilters().folderLock().attachSettings(filterId);
 		box->lifetime().add([=] {
 			session->data().chatsFilters().folderLock().endSettings(filterId);
 		});
@@ -1243,6 +1244,7 @@ void EditExistingFilterUnlocked(
 	const auto &list = session->data().chatsFilters().list();
 	const auto i = ranges::find(list, id, &Data::ChatFilter::id);
 	if (i == end(list)) {
+		session->data().chatsFilters().folderLock().endSettings(id);
 		return;
 	}
 	// AyuGram: the decoy mode shows fake data and merges it back.
