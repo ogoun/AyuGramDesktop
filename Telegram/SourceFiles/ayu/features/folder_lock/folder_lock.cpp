@@ -15,6 +15,7 @@
 #include "core/shortcuts.h"
 #include "main/main_account.h"
 #include "main/main_domain.h"
+#include "data/data_changes.h"
 #include "data/data_chat_filters.h"
 #include "data/data_document.h"
 #include "data/data_file_origin.h"
@@ -98,6 +99,14 @@ FolderLock::FolderLock(not_null<Main::Session*> session)
 	) | rpl::on_next([=] {
 		_vault->sweepAll();
 	}, _lifetime);
+
+	_session->changes().peerUpdates(
+		Data::PeerUpdate::Flag::IsContact
+	) | rpl::on_next([=](const Data::PeerUpdate &update) {
+		if (const auto history = _session->data().historyLoaded(update.peer)) {
+			_verdicts.erase(history);
+		}
+	}, _lifetime);
 	crl::on_main(this, [=] {
 		_vault->sweepAll();
 		if (!_awaitingRules) {
@@ -116,6 +125,7 @@ void FolderLock::refreshProtected(bool notify) {
 	if (_refreshing) {
 		return; // Re-entered from our own stale records purge below.
 	}
+	invalidateVerdicts();
 	auto &settings = AyuSettings::getInstance();
 	const auto &filters = _session->data().chatsFilters();
 	auto records = settings.folderProtectionIds(userId());
@@ -190,6 +200,7 @@ void FolderLock::refreshProtected(bool notify) {
 		// A PIN was set or removed, not a change of the folder rules.
 		_rules = collectRules();
 	}
+	invalidateVerdicts(); // Unlocked folders could be removed above.
 	if (notify && (protectedChanged || (wasAwaiting != _awaitingRules))) {
 		applyChanged(added);
 	}
@@ -215,12 +226,40 @@ bool FolderLock::isLocked(FilterId id) const {
 bool FolderLock::anyLocked() const {
 	if (_awaitingRules) {
 		return true;
+	} else if (!_anyLocked) {
+		// A folder opened with the second PIN still hides its other chats.
+		_anyLocked = ranges::any_of(_protected, [&](FilterId id) {
+			const auto i = _unlocked.find(id);
+			return (i == end(_unlocked)) || (i->second.slot == 1);
+		});
 	}
-	// A folder opened with the second PIN still hides its other chats.
-	return ranges::any_of(_protected, [&](FilterId id) {
-		const auto i = _unlocked.find(id);
-		return (i == end(_unlocked)) || (i->second.slot == 1);
-	});
+	return *_anyLocked;
+}
+
+void FolderLock::invalidateVerdicts() {
+	_verdicts.clear();
+	_anyLocked = std::nullopt;
+	_lockedByType = std::nullopt;
+	_sealedByType = std::nullopt;
+}
+
+bool FolderLock::matchesByTypeAny(bool encrypted) const {
+	using Flag = Data::ChatFilter::Flag;
+	const auto types = Flag::Contacts
+		| Flag::NonContacts
+		| Flag::Groups
+		| Flag::Channels
+		| Flag::Bots;
+	const auto &list = _session->data().chatsFilters().list();
+	for (const auto &filter : list) {
+		const auto id = filter.id();
+		if (!(filter.flags() & types)) {
+			continue;
+		} else if (encrypted ? _encrypted.contains(id) : isProtected(id)) {
+			return true;
+		}
+	}
+	return false;
 }
 
 bool FolderLock::isLocked(not_null<History*> history) const {
@@ -229,6 +268,15 @@ bool FolderLock::isLocked(not_null<History*> history) const {
 	} else if (!anyLocked()) {
 		return false;
 	}
+	auto &verdict = _verdicts[history.get()];
+	if (!verdict.lockedKnown) {
+		verdict.locked = computeLocked(history);
+		verdict.lockedKnown = true;
+	}
+	return verdict.locked;
+}
+
+bool FolderLock::computeLocked(not_null<History*> history) const {
 	// Hidden if it matches a locked protected folder and no unlocked one:
 	// a folder unlocked by the user shows all of its chats.
 	const auto &list = _session->data().chatsFilters().list();
@@ -252,9 +300,16 @@ bool FolderLock::isLocked(not_null<History*> history) const {
 bool FolderLock::isLocked(not_null<PeerData*> peer) const {
 	if (!anyLocked()) {
 		return false;
+	} else if (const auto history = peer->owner().historyLoaded(peer)) {
+		return isLocked(not_null(history));
+	} else if (_awaitingRules) {
+		return true;
+	} else if (!_lockedByType) {
+		_lockedByType = matchesByTypeAny(false);
 	}
-	// A not yet loaded chat still matches by its type.
-	return isLocked(peer->owner().history(peer));
+	// A chat without a History is in no always() list, it can match only by
+	// its type: don't create History objects for any peer asked.
+	return *_lockedByType && isLocked(peer->owner().history(peer));
 }
 
 bool FolderLock::isLockedForList(
@@ -1169,6 +1224,7 @@ auto FolderLock::collectRules() const -> base::flat_map<FilterId, Rules> {
 }
 
 void FolderLock::rulesChanged() {
+	invalidateVerdicts();
 	refreshProtected(true);
 	// Pinning, reordering or renaming don't change what is hidden, so they
 	// don't lock. Changed rules (maybe from another device) lock everything.
@@ -1304,8 +1360,15 @@ void FolderLock::forgetFolder(FilterId id) {
 bool FolderLock::isSealed(not_null<History*> history) const {
 	if (_awaitingRules) {
 		return _encryptedRecords;
+	} else if (_encrypted.empty()) {
+		return false;
 	}
-	return sealFolder(history).has_value();
+	auto &verdict = _verdicts[history.get()];
+	if (!verdict.sealedKnown) {
+		verdict.sealed = sealFolder(history).has_value();
+		verdict.sealedKnown = true;
+	}
+	return verdict.sealed;
 }
 
 bool FolderLock::isSealed(not_null<PeerData*> peer) const {
@@ -1313,8 +1376,12 @@ bool FolderLock::isSealed(not_null<PeerData*> peer) const {
 		return _encryptedRecords;
 	} else if (_encrypted.empty()) {
 		return false;
+	} else if (const auto history = peer->owner().historyLoaded(peer)) {
+		return isSealed(not_null(history));
+	} else if (!_sealedByType) {
+		_sealedByType = matchesByTypeAny(true);
 	}
-	return isSealed(peer->owner().history(peer));
+	return *_sealedByType && isSealed(peer->owner().history(peer));
 }
 
 bool FolderLock::isSealedMedia(
@@ -1410,6 +1477,7 @@ std::optional<FilterId> FolderLock::sealFolder(
 }
 
 void FolderLock::applyChanged(bool locking) {
+	invalidateVerdicts();
 	_vault->forgetClosed();
 	_session->data().ayuRefreshAllChatLists();
 	_session->data().notifyUnreadBadgeChanged();

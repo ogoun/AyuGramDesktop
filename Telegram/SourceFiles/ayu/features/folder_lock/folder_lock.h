@@ -11,6 +11,8 @@
 #include "base/weak_ptr.h"
 #include "data/data_chat_filters.h"
 
+#include <unordered_map>
+
 class History;
 class PeerData;
 class DocumentData;
@@ -187,6 +189,20 @@ private:
 		friend inline bool operator==(const Rules &, const Rules &) = default;
 	};
 
+	// Verdicts per chat are cached: they are asked on every chat list
+	// update, unread badge recount and paint of the archive row.
+	struct Verdict {
+		bool lockedKnown = false;
+		bool locked = false;
+		bool sealedKnown = false;
+		bool sealed = false;
+	};
+	void invalidateVerdicts();
+	[[nodiscard]] bool computeLocked(not_null<History*> history) const;
+	// A locked (or encrypted) folder matches chats by their type, so a chat
+	// without a History can match it too.
+	[[nodiscard]] bool matchesByTypeAny(bool encrypted) const;
+
 	void refreshProtected(bool notify);
 	[[nodiscard]] base::flat_map<FilterId, Rules> collectRules() const;
 	void applyChanged(bool locking);
@@ -224,6 +240,10 @@ private:
 	base::flat_set<FilterId> _probed;
 	bool _probing = false;
 	base::flat_set<FilterId> _encrypted;
+	mutable std::unordered_map<const History*, Verdict> _verdicts;
+	mutable std::optional<bool> _anyLocked;
+	mutable std::optional<bool> _lockedByType;
+	mutable std::optional<bool> _sealedByType;
 	bool _encryptedRecords = false; // Also of folders not loaded yet.
 	std::unique_ptr<FolderVault> _vault;
 	base::flat_map<FilterId, Access> _access;
