@@ -803,18 +803,28 @@ HistoryWidget::HistoryWidget(
 		item->mainView()->itemDataChanged();
 	}, lifetime());
 
+	// AyuGram: one rebuild per event loop pass for any number of events.
+	const auto ayuRebuildScheduled = lifetime().make_state<bool>(false);
 	rpl::merge(
 		session().changes().peerUpdates(
 			Data::PeerUpdate::Flag::IsBlocked
-		) | rpl::to_empty,
+		) | rpl::filter([](const Data::PeerUpdate &) {
+			// AyuGram: blocked status changes only what "hide from blocked"
+			// hides (e.g. the first userFull of every user fires it).
+			const auto &settings = AyuSettings::getInstance();
+			return settings.filtersEnabled() && settings.hideFromBlocked();
+		}) | rpl::to_empty,
 		FiltersCacheController::updates()
-	) | rpl::on_next(
+	) | rpl::filter([=] {
+		return !std::exchange(*ayuRebuildScheduled, true);
+	}) | rpl::on_next(
 		[=]
 		{
 			crl::on_main(
 				this,
 				[=]
 				{
+					*ayuRebuildScheduled = false;
 					if (_history) {
 						_history->forceFullResize();
 						if (_migrated) {
