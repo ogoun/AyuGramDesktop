@@ -20,6 +20,8 @@ public:
 namespace AyuDatabase {
 
 void initialize();
+// Writes the queued records (application exit).
+void finish();
 
 void addEditedMessage(const EditedMessage &message);
 std::vector<EditedMessage> getEditedMessages(ID userId, ID dialogId, ID messageId, ID minId, ID maxId, int totalLimit);

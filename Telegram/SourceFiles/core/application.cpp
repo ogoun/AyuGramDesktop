@@ -7,6 +7,8 @@ https://github.com/telegramdesktop/tdesktop/blob/master/LEGAL
 */
 #include "core/application.h"
 
+#include "ayu/data/ayu_database.h" // AyuGram
+
 #include "data/data_abstract_structure.h"
 #include "data/data_channel.h"
 #include "data/data_forum.h"
@@ -287,6 +289,7 @@ Application::~Application() {
 
 	_private->proxyRotation = nullptr;
 	_domain->finish();
+	AyuDatabase::finish(); // AyuGram: queued records.
 	MTP::WebProxy::Transport::Shutdown();
 
 	Local::finish();

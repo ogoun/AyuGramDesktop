@@ -6,15 +6,20 @@
 // Copyright @Radolyn, 2026
 #include "ayu/data/ayu_database.h"
 
+#include "ayu/data/batched_writer.h"
 #include "ayu/data/entities.h"
 #include "ayu/libs/sqlite/sqlite_orm.h"
 #include "base/unixtime.h"
 
+#include <crl/crl_queue.h>
+
+#include <atomic>
 #include <mutex>
 
 using namespace sqlite_orm;
 
-std::mutex databaseMutex;
+// Recursive: queued writes are drained by functions that already hold it.
+std::recursive_mutex databaseMutex;
 
 auto storage = make_storage(
 	"./tdata/ayudata.db",
@@ -218,7 +223,84 @@ void runMigrations(decltype(storage) &storage) {
 	}
 }
 
+namespace {
+
+// AyuGram: deleted / edited message records are written off the main thread
+// in batches (one transaction per batch): a synchronous commit costs tens of
+// milliseconds on a disk and froze the UI for every deleted message.
+sqlite3 *Connection = nullptr;
+std::atomic<bool> Finished = false;
+
+void RunBatch(std::vector<Ayu::BatchedWriter::Write> &&writes) {
+	std::lock_guard lock(databaseMutex);
+	try {
+		storage.begin_transaction();
+	} catch (std::exception &ex) {
+		LOG(("Failed to begin a batch of database writes: %1").arg(ex.what()));
+		return;
+	}
+	for (auto &write : writes) {
+		try {
+			write();
+		} catch (std::exception &ex) {
+			LOG(("Failed to write a database record: %1").arg(ex.what()));
+		}
+	}
+	try {
+		storage.commit();
+	} catch (std::exception &ex) {
+		try {
+			storage.rollback();
+		} catch (...) {
+		}
+		LOG(("Failed to commit a batch of database writes: %1").arg(ex.what()));
+	}
+}
+
+Ayu::BatchedWriter &Writer();
+
+crl::queue &WriteQueue() {
+	static crl::queue queue;
+	return queue;
+}
+
+Ayu::BatchedWriter &Writer() {
+	static Ayu::BatchedWriter writer([] {
+		WriteQueue().async([] {
+			if (!Finished) {
+				Writer().drain();
+			}
+		});
+	}, RunBatch);
+	return writer;
+}
+
+[[nodiscard]] std::unique_lock<std::recursive_mutex> LockAndDrain() {
+	auto lock = std::unique_lock(databaseMutex);
+	Writer().drain();
+	return lock;
+}
+
+// Plain copies of records that became encrypted must not stay in the WAL.
+void TruncateJournal() {
+	if (Connection) {
+		sqlite3_exec(
+			Connection,
+			"PRAGMA wal_checkpoint(TRUNCATE);",
+			nullptr,
+			nullptr,
+			nullptr);
+	}
+}
+
+} // namespace
+
 namespace AyuDatabase {
+
+void finish() {
+	Finished = true;
+	Writer().finish();
+}
 
 void moveCurrentDatabase() {
 	const auto time = base::unixtime::now();
@@ -237,10 +319,21 @@ void moveCurrentDatabase() {
 }
 
 void initialize() {
-	std::lock_guard lock(databaseMutex);
+	const auto lock = LockAndDrain();
 	// AyuGram: removed records (plain copies of encrypted ones) are zeroed.
+	// WAL + synchronous=NORMAL: a commit doesn't wait for the disk (the
+	// default rollback journal with fsync took tens of ms per commit).
 	storage.on_open = [](sqlite3 *db) {
-		sqlite3_exec(db, "PRAGMA secure_delete = ON;", nullptr, nullptr, nullptr);
+		Connection = db;
+		sqlite3_exec(
+			db,
+			"PRAGMA journal_mode = WAL;"
+			"PRAGMA synchronous = NORMAL;"
+			"PRAGMA journal_size_limit = 4194304;"
+			"PRAGMA secure_delete = ON;",
+			nullptr,
+			nullptr,
+			nullptr);
 	};
 	try {
 		storage.sync_schema(true);
@@ -266,22 +359,13 @@ void initialize() {
 }
 
 void addEditedMessage(const EditedMessage &message) {
-	std::lock_guard lock(databaseMutex);
-	try {
-		storage.begin_transaction();
+	Writer().enqueue([message] {
 		storage.insert(message);
-		storage.commit();
-	} catch (std::exception &ex) {
-		try {
-			storage.rollback();
-		} catch (...) {
-		}
-		LOG(("Failed to save edited message for some reason: %1").arg(ex.what()));
-	}
+	});
 }
 
 std::vector<EditedMessage> getEditedMessages(ID userId, ID dialogId, ID messageId, ID minId, ID maxId, int totalLimit) {
-	std::lock_guard lock(databaseMutex);
+	const auto lock = LockAndDrain();
 	try {
 		return storage.get_all<EditedMessage>(
 			where(
@@ -301,7 +385,7 @@ std::vector<EditedMessage> getEditedMessages(ID userId, ID dialogId, ID messageI
 }
 
 bool hasRevisions(ID userId, ID dialogId, ID messageId) {
-	std::lock_guard lock(databaseMutex);
+	const auto lock = LockAndDrain();
 	try {
 		return !storage.select(
 			columns(column<EditedMessage>(&EditedMessage::messageId)),
@@ -319,22 +403,13 @@ bool hasRevisions(ID userId, ID dialogId, ID messageId) {
 }
 
 void addDeletedMessage(const DeletedMessage &message) {
-	std::lock_guard lock(databaseMutex);
-	try {
-		storage.begin_transaction();
+	Writer().enqueue([message] {
 		storage.insert(message);
-		storage.commit();
-	} catch (std::exception &ex) {
-		try {
-			storage.rollback();
-		} catch (...) {
-		}
-		LOG(("Failed to save edited message for some reason: %1").arg(ex.what()));
-	}
+	});
 }
 
 std::vector<DeletedMessage> getDeletedMessages(ID userId, ID dialogId, ID topicId, ID minId, ID maxId, int totalLimit, const std::string &searchQuery) {
-	std::lock_guard lock(databaseMutex);
+	const auto lock = LockAndDrain();
 	try {
 		if (searchQuery.empty()) {
 			return storage.get_all<DeletedMessage>(
@@ -378,7 +453,7 @@ std::vector<DeletedMessage> getDeletedMessages(ID userId, ID dialogId, ID topicI
 }
 
 bool hasDeletedMessages(ID userId, ID dialogId, ID topicId) {
-	std::lock_guard lock(databaseMutex);
+	const auto lock = LockAndDrain();
 	try {
 		return !storage.select(
 			columns(column<DeletedMessage>(&DeletedMessage::dialogId)),
@@ -396,8 +471,7 @@ bool hasDeletedMessages(ID userId, ID dialogId, ID topicId) {
 }
 
 void removeDeletedMessage(ID userId, ID dialogId, ID messageId) {
-	std::lock_guard lock(databaseMutex);
-	try {
+	Writer().enqueue([=] {
 		storage.remove_all<DeletedMessage>(
 			where(
 				column<DeletedMessage>(&DeletedMessage::userId) == userId and
@@ -405,13 +479,11 @@ void removeDeletedMessage(ID userId, ID dialogId, ID messageId) {
 				column<DeletedMessage>(&DeletedMessage::messageId) == messageId
 			)
 		);
-	} catch (std::exception &ex) {
-		LOG(("Failed to remove deleted message: %1").arg(ex.what()));
-	}
+	});
 }
 
 void clearDeletedMessages(ID userId, ID dialogId, ID topicId) {
-	std::lock_guard lock(databaseMutex);
+	const auto lock = LockAndDrain();
 	try {
 		storage.remove_all<DeletedMessage>(
 			where(
@@ -453,7 +525,7 @@ void OverwriteAll(std::vector<Message> &messages) {
 } // namespace
 
 ID addSealedMessage(const SealedMessage &message) {
-	std::lock_guard lock(databaseMutex);
+	const auto lock = LockAndDrain();
 	try {
 		return storage.insert(message);
 	} catch (std::exception &ex) {
@@ -463,7 +535,7 @@ ID addSealedMessage(const SealedMessage &message) {
 }
 
 std::vector<SealedMessage> getSealedMessages(ID userId, const std::vector<char> &keyTag) {
-	std::lock_guard lock(databaseMutex);
+	const auto lock = LockAndDrain();
 	try {
 		return storage.get_all<SealedMessage>(
 			where(
@@ -482,7 +554,7 @@ void removeSealedMessages(const std::vector<ID> &fakeIds) {
 	if (fakeIds.empty()) {
 		return;
 	}
-	std::lock_guard lock(databaseMutex);
+	const auto lock = LockAndDrain();
 	try {
 		storage.remove_all<SealedMessage>(
 			where(in(&SealedMessage::fakeId, fakeIds))
@@ -493,7 +565,7 @@ void removeSealedMessages(const std::vector<ID> &fakeIds) {
 }
 
 void removeSealedByTag(ID userId, const std::vector<char> &keyTag) {
-	std::lock_guard lock(databaseMutex);
+	const auto lock = LockAndDrain();
 	try {
 		storage.remove_all<SealedMessage>(
 			where(
@@ -514,7 +586,7 @@ int sealPlainMessages(
 	if (dialogIds.empty()) {
 		return 0;
 	}
-	std::lock_guard lock(databaseMutex);
+	const auto lock = LockAndDrain();
 	auto deleted = std::vector<DeletedMessage>();
 	auto edited = std::vector<EditedMessage>();
 	try {
@@ -586,6 +658,7 @@ int sealPlainMessages(
 		LOG(("Failed to move plain messages to sealed: %1").arg(ex.what()));
 		return 0;
 	}
+	TruncateJournal();
 	return int(sealed.size());
 }
 
@@ -593,7 +666,7 @@ bool unsealMessages(
 		ID userId,
 		const std::vector<char> &keyTag,
 		const std::vector<UnsealedMessage> &messages) {
-	std::lock_guard lock(databaseMutex);
+	const auto lock = LockAndDrain();
 	try {
 		storage.begin_transaction();
 		for (const auto &message : messages) {
@@ -618,11 +691,12 @@ bool unsealMessages(
 		LOG(("Failed to move sealed messages to plain: %1").arg(ex.what()));
 		return false;
 	}
+	TruncateJournal();
 	return true;
 }
 
 void removeSealedExcept(ID userId, const std::vector<std::vector<char>> &keep) {
-	std::lock_guard lock(databaseMutex);
+	const auto lock = LockAndDrain();
 	try {
 		const auto rows = storage.select(
 			columns(
@@ -649,7 +723,7 @@ void removeSealedExcept(ID userId, const std::vector<std::vector<char>> &keep) {
 
 template<typename T>
 std::vector<T> getAllT() {
-	std::lock_guard lock(databaseMutex);
+	const auto lock = LockAndDrain();
 	try {
 		return storage.get_all<T>();
 	} catch (std::exception &ex) {
@@ -667,7 +741,7 @@ std::vector<RegexFilterGlobalExclusion> getAllFiltersExclusions() {
 }
 
 std::vector<RegexFilter> getExcludedByDialogId(ID dialogId) {
-	std::lock_guard lock(databaseMutex);
+	const auto lock = LockAndDrain();
 	try {
 		return storage.get_all<RegexFilter>(
 			where(in(&RegexFilter::id,
@@ -683,7 +757,7 @@ std::vector<RegexFilter> getExcludedByDialogId(ID dialogId) {
 }
 
 int getCount() {
-	std::lock_guard lock(databaseMutex);
+	const auto lock = LockAndDrain();
 	try {
 		return storage.count<RegexFilter>();
 	} catch (std::exception &ex) {
@@ -693,7 +767,7 @@ int getCount() {
 }
 
 RegexFilter getById(std::vector<char> id) {
-	std::lock_guard lock(databaseMutex);
+	const auto lock = LockAndDrain();
 	try {
 		return storage.get<RegexFilter>(
 			where(column<RegexFilter>(&RegexFilter::id) == std::move(id))
@@ -705,7 +779,7 @@ RegexFilter getById(std::vector<char> id) {
 }
 
 std::vector<RegexFilter> getShared() {
-	std::lock_guard lock(databaseMutex);
+	const auto lock = LockAndDrain();
 	try {
 		return storage.get_all<RegexFilter>(
 			where(is_null(column<RegexFilter>(&RegexFilter::dialogId)))
@@ -717,7 +791,7 @@ std::vector<RegexFilter> getShared() {
 }
 
 std::vector<RegexFilter> getByDialogId(ID dialogId) {
-	std::lock_guard lock(databaseMutex);
+	const auto lock = LockAndDrain();
 	try {
 		return storage.get_all<RegexFilter>(
 			where(column<RegexFilter>(&RegexFilter::dialogId) == dialogId)
@@ -729,7 +803,7 @@ std::vector<RegexFilter> getByDialogId(ID dialogId) {
 }
 
 void addRegexFilter(const RegexFilter &filter) {
-	std::lock_guard lock(databaseMutex);
+	const auto lock = LockAndDrain();
 	try {
 		storage.begin_transaction();
 		storage.replace(filter); // we're using replace as we set std::vector<char> as primary key
@@ -744,7 +818,7 @@ void addRegexFilter(const RegexFilter &filter) {
 }
 
 void addRegexExclusion(const RegexFilterGlobalExclusion &exclusion) {
-	std::lock_guard lock(databaseMutex);
+	const auto lock = LockAndDrain();
 	try {
 		storage.begin_transaction();
 		storage.insert(exclusion);
@@ -759,7 +833,7 @@ void addRegexExclusion(const RegexFilterGlobalExclusion &exclusion) {
 }
 
 void updateRegexFilter(const RegexFilter &filter) {
-	std::lock_guard lock(databaseMutex);
+	const auto lock = LockAndDrain();
 	try {
 		storage.update_all(
 			set(
@@ -777,7 +851,7 @@ void updateRegexFilter(const RegexFilter &filter) {
 }
 
 void deleteFilter(const std::vector<char> &id) {
-	std::lock_guard lock(databaseMutex);
+	const auto lock = LockAndDrain();
 	try {
 		storage.remove_all<RegexFilter>(
 			where(column<RegexFilter>(&RegexFilter::id) == id)
@@ -788,7 +862,7 @@ void deleteFilter(const std::vector<char> &id) {
 }
 
 void deleteExclusionsByFilterId(const std::vector<char> &id) {
-	std::lock_guard lock(databaseMutex);
+	const auto lock = LockAndDrain();
 	try {
 		storage.remove_all<RegexFilterGlobalExclusion>(
 			where(column<RegexFilterGlobalExclusion>(&RegexFilterGlobalExclusion::filterId) == id)
@@ -799,7 +873,7 @@ void deleteExclusionsByFilterId(const std::vector<char> &id) {
 }
 
 void deleteExclusion(ID dialogId, std::vector<char> filterId) {
-	std::lock_guard lock(databaseMutex);
+	const auto lock = LockAndDrain();
 	try {
 		storage.remove_all<RegexFilterGlobalExclusion>(
 			where(column<RegexFilterGlobalExclusion>(&RegexFilterGlobalExclusion::filterId) == filterId and
@@ -812,7 +886,7 @@ void deleteExclusion(ID dialogId, std::vector<char> filterId) {
 }
 
 void deleteAllFilters() {
-	std::lock_guard lock(databaseMutex);
+	const auto lock = LockAndDrain();
 	try {
 		storage.remove_all<RegexFilter>();
 	} catch (std::exception &ex) {
@@ -821,7 +895,7 @@ void deleteAllFilters() {
 }
 
 void deleteAllExclusions() {
-	std::lock_guard lock(databaseMutex);
+	const auto lock = LockAndDrain();
 	try {
 		storage.remove_all<RegexFilterGlobalExclusion>();
 	} catch (std::exception &ex) {
@@ -830,7 +904,7 @@ void deleteAllExclusions() {
 }
 
 bool hasFilters() {
-	std::lock_guard lock(databaseMutex);
+	const auto lock = LockAndDrain();
 	try {
 		return !storage.select(
 			columns(column<RegexFilter>(&RegexFilter::id)),
@@ -843,7 +917,7 @@ bool hasFilters() {
 }
 
 bool hasPerDialogFilters() {
-	std::lock_guard lock(databaseMutex);
+	const auto lock = LockAndDrain();
 	try {
 		return
 			!storage.select(

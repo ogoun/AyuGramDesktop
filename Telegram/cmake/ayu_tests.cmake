@@ -9,6 +9,9 @@ target_include_directories(test_ayu_folder_lock PRIVATE ${src_loc})
 
 nice_target_sources(test_ayu_folder_lock ${src_loc}
 PRIVATE
+    ayu/data/batched_writer.cpp
+    ayu/data/batched_writer.h
+    ayu/data/tests/batched_writer_tests.cpp
     ayu/features/folder_lock/folder_lock_crypto.cpp
     ayu/features/folder_lock/folder_lock_crypto.h
     ayu/features/folder_lock/folder_lock_merge.cpp

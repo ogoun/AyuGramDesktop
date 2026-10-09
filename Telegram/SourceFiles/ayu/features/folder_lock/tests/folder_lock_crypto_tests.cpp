@@ -379,6 +379,8 @@ void TestWipe() {
 
 } // namespace
 
+int RunBatchedWriterTests(); // ayu/data/tests/batched_writer_tests.cpp
+
 int main() {
 	TestDeriveKey();
 	TestSealOpen();
@@ -393,6 +395,7 @@ int main() {
 	TestSealedBox();
 	TestVaultCodec();
 	TestWipe();
+	Failed += RunBatchedWriterTests();
 	if (Failed) {
 		std::printf("FAILED: %d\n", Failed);
 		return 1;
