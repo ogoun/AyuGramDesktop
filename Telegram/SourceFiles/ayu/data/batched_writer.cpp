@@ -9,9 +9,11 @@
 namespace Ayu {
 
 BatchedWriter::BatchedWriter(
+	std::recursive_mutex &lock,
 	std::function<void()> scheduleDrain,
 	Runner run)
-: _scheduleDrain(std::move(scheduleDrain))
+: _lock(lock)
+, _scheduleDrain(std::move(scheduleDrain))
 , _run(std::move(run)) {
 }
 
@@ -29,6 +31,7 @@ void BatchedWriter::enqueue(Write write) {
 		}
 	}
 	if (!now.empty()) {
+		std::lock_guard lock(_lock);
 		_run(std::move(now));
 	} else if (schedule) {
 		_scheduleDrain();
@@ -36,6 +39,7 @@ void BatchedWriter::enqueue(Write write) {
 }
 
 void BatchedWriter::drain() {
+	std::lock_guard outer(_lock);
 	auto writes = std::vector<Write>();
 	{
 		std::lock_guard lock(_mutex);

@@ -192,12 +192,14 @@ private:
 	// Verdicts per chat are cached: they are asked on every chat list
 	// update, unread badge recount and paint of the archive row.
 	struct Verdict {
+		int type = -1; // Type of the chat the verdicts were computed for.
 		bool lockedKnown = false;
 		bool locked = false;
 		bool sealedKnown = false;
 		bool sealed = false;
 	};
 	void invalidateVerdicts();
+	[[nodiscard]] Verdict &verdictFor(not_null<History*> history) const;
 	[[nodiscard]] bool computeLocked(not_null<History*> history) const;
 	// A locked (or encrypted) folder matches chats by their type, so a chat
 	// without a History can match it too.

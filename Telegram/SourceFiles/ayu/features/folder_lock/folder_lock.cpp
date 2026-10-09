@@ -15,7 +15,7 @@
 #include "core/shortcuts.h"
 #include "main/main_account.h"
 #include "main/main_domain.h"
-#include "data/data_changes.h"
+#include "data/data_channel.h"
 #include "data/data_chat_filters.h"
 #include "data/data_document.h"
 #include "data/data_file_origin.h"
@@ -23,6 +23,7 @@
 #include "data/data_photo.h"
 #include "data/data_peer.h"
 #include "data/data_session.h"
+#include "data/data_user.h"
 #include "dialogs/dialogs_indexed_list.h"
 #include "dialogs/dialogs_main_list.h"
 #include "dialogs/dialogs_row.h"
@@ -59,6 +60,18 @@ void SetupLockShortcutOnce() {
 			return true;
 		});
 	}, lifetime);
+}
+
+// What ChatFilter::matchesByType() looks at: a chat loaded later (a bot,
+// a channel) or a contact status change makes cached verdicts stale.
+[[nodiscard]] int TypeOf(not_null<History*> history) {
+	const auto peer = history->peer;
+	if (const auto user = peer->asUser()) {
+		return user->isBot() ? 1 : user->isContact() ? 2 : 3;
+	} else if (const auto channel = peer->asChannel()) {
+		return channel->isCommunity() ? 4 : channel->isBroadcast() ? 5 : 6;
+	}
+	return 7;
 }
 
 [[nodiscard]] KdfParams ParamsOf(const FolderProtectionRecord &record) {
@@ -100,13 +113,6 @@ FolderLock::FolderLock(not_null<Main::Session*> session)
 		_vault->sweepAll();
 	}, _lifetime);
 
-	_session->changes().peerUpdates(
-		Data::PeerUpdate::Flag::IsContact
-	) | rpl::on_next([=](const Data::PeerUpdate &update) {
-		if (const auto history = _session->data().historyLoaded(update.peer)) {
-			_verdicts.erase(history);
-		}
-	}, _lifetime);
 	crl::on_main(this, [=] {
 		_vault->sweepAll();
 		if (!_awaitingRules) {
@@ -236,6 +242,16 @@ bool FolderLock::anyLocked() const {
 	return *_anyLocked;
 }
 
+FolderLock::Verdict &FolderLock::verdictFor(
+		not_null<History*> history) const {
+	auto &verdict = _verdicts[history.get()];
+	const auto type = TypeOf(history);
+	if (verdict.type != type) {
+		verdict = Verdict{ .type = type };
+	}
+	return verdict;
+}
+
 void FolderLock::invalidateVerdicts() {
 	_verdicts.clear();
 	_anyLocked = std::nullopt;
@@ -268,7 +284,7 @@ bool FolderLock::isLocked(not_null<History*> history) const {
 	} else if (!anyLocked()) {
 		return false;
 	}
-	auto &verdict = _verdicts[history.get()];
+	auto &verdict = verdictFor(history);
 	if (!verdict.lockedKnown) {
 		verdict.locked = computeLocked(history);
 		verdict.lockedKnown = true;
@@ -1363,7 +1379,7 @@ bool FolderLock::isSealed(not_null<History*> history) const {
 	} else if (_encrypted.empty()) {
 		return false;
 	}
-	auto &verdict = _verdicts[history.get()];
+	auto &verdict = verdictFor(history);
 	if (!verdict.sealedKnown) {
 		verdict.sealed = sealFolder(history).has_value();
 		verdict.sealedKnown = true;

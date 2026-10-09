@@ -9,7 +9,9 @@
 #include "ayu/data/batched_writer.h"
 
 #include <atomic>
+#include <chrono>
 #include <cstdio>
+#include <mutex>
 #include <thread>
 #include <vector>
 
@@ -29,10 +31,12 @@ using Ayu::BatchedWriter;
 // Writes queued before a drain run as one batch, in order, and the drain
 // is scheduled once per batch.
 void TestBatching() {
+	auto lock = std::recursive_mutex();
 	auto scheduled = 0;
 	auto batches = std::vector<int>();
 	auto order = std::vector<int>();
 	auto writer = BatchedWriter(
+		lock,
 		[&] { ++scheduled; },
 		[&](std::vector<BatchedWriter::Write> &&writes) {
 			batches.push_back(int(writes.size()));
@@ -63,9 +67,11 @@ void TestBatching() {
 
 // After finish() writes run at once (nothing is left in the queue at exit).
 void TestFinish() {
+	auto lock = std::recursive_mutex();
 	auto scheduled = 0;
 	auto done = 0;
 	auto writer = BatchedWriter(
+		lock,
 		[&] { ++scheduled; },
 		[&](std::vector<BatchedWriter::Write> &&writes) {
 			for (auto &write : writes) {
@@ -83,8 +89,10 @@ void TestFinish() {
 
 // Concurrent producers and drains: every write runs exactly once.
 void TestThreads() {
+	auto lock = std::recursive_mutex();
 	auto executed = std::atomic<int>(0);
 	auto writer = BatchedWriter(
+		lock,
 		[] {},
 		[&](std::vector<BatchedWriter::Write> &&writes) {
 			for (auto &write : writes) {
@@ -109,11 +117,48 @@ void TestThreads() {
 	AYU_CHECK(executed.load() == 4000);
 }
 
+// A drain under the database lock sees every write queued before it, even
+// while the worker thread has taken a batch and waits for that lock.
+void TestDrainUnderLock() {
+	auto outer = std::recursive_mutex();
+	auto &lock = outer;
+	auto executed = std::atomic<int>(0);
+	auto stop = std::atomic<bool>(false);
+	auto writer = BatchedWriter(
+		lock,
+		[] {},
+		[&](std::vector<BatchedWriter::Write> &&writes) {
+			std::lock_guard lock(outer); // Like the database batch runner.
+			std::this_thread::sleep_for(std::chrono::microseconds(200));
+			for (auto &write : writes) {
+				write();
+			}
+		});
+	auto worker = std::thread([&] {
+		while (!stop) {
+			writer.drain();
+		}
+	});
+	auto missed = 0;
+	for (auto i = 0; i != 300; ++i) {
+		writer.enqueue([&] { ++executed; });
+		std::lock_guard lock(outer);
+		writer.drain();
+		if (executed.load() != i + 1) {
+			++missed;
+		}
+	}
+	stop = true;
+	worker.join();
+	AYU_CHECK(missed == 0);
+}
+
 } // namespace
 
 int RunBatchedWriterTests() {
 	TestBatching();
 	TestFinish();
 	TestThreads();
+	TestDrainUnderLock();
 	return Failed;
 }

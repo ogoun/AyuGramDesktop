@@ -14,14 +14,18 @@ namespace Ayu {
 
 // Database writes off the main thread: writes queued until a drain run as
 // one batch (one transaction), the drain is scheduled once per batch.
-// Thread safe. The batch runner is called by drain() in the caller thread,
-// so the caller holds the database lock around drain().
+// Thread safe. drain() takes the database `lock` before it takes the batch,
+// so a drain under that lock sees every write queued before it (a batch
+// taken by another thread is already written).
 class BatchedWriter final {
 public:
 	using Write = std::function<void()>;
 	using Runner = std::function<void(std::vector<Write> &&writes)>;
 
-	BatchedWriter(std::function<void()> scheduleDrain, Runner run);
+	BatchedWriter(
+		std::recursive_mutex &lock,
+		std::function<void()> scheduleDrain,
+		Runner run);
 
 	void enqueue(Write write);
 	// Runs the queued writes now: before reads and synchronous writes.
@@ -31,6 +35,7 @@ public:
 	[[nodiscard]] int pending() const;
 
 private:
+	std::recursive_mutex &_lock;
 	const std::function<void()> _scheduleDrain;
 	const Runner _run;
 	mutable std::mutex _mutex;

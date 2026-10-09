@@ -244,6 +244,8 @@ void RunBatch(std::vector<Ayu::BatchedWriter::Write> &&writes) {
 			write();
 		} catch (std::exception &ex) {
 			LOG(("Failed to write a database record: %1").arg(ex.what()));
+		} catch (...) {
+			LOG(("Failed to write a database record."));
 		}
 	}
 	try {
@@ -260,12 +262,13 @@ void RunBatch(std::vector<Ayu::BatchedWriter::Write> &&writes) {
 Ayu::BatchedWriter &Writer();
 
 crl::queue &WriteQueue() {
-	static crl::queue queue;
-	return queue;
+	// Never destroyed: a scheduled task may run while the app exits.
+	static const auto queue = new crl::queue();
+	return *queue;
 }
 
 Ayu::BatchedWriter &Writer() {
-	static Ayu::BatchedWriter writer([] {
+	static Ayu::BatchedWriter writer(databaseMutex, [] {
 		WriteQueue().async([] {
 			if (!Finished) {
 				Writer().drain();
@@ -283,13 +286,17 @@ Ayu::BatchedWriter &Writer() {
 
 // Plain copies of records that became encrypted must not stay in the WAL.
 void TruncateJournal() {
-	if (Connection) {
-		sqlite3_exec(
-			Connection,
-			"PRAGMA wal_checkpoint(TRUNCATE);",
-			nullptr,
-			nullptr,
-			nullptr);
+	if (!Connection) {
+		return;
+	}
+	const auto result = sqlite3_exec(
+		Connection,
+		"PRAGMA wal_checkpoint(TRUNCATE);",
+		nullptr,
+		nullptr,
+		nullptr);
+	if (result != SQLITE_OK) {
+		LOG(("Failed to truncate the database journal: %1").arg(result));
 	}
 }
 
@@ -298,6 +305,8 @@ void TruncateJournal() {
 namespace AyuDatabase {
 
 void finish() {
+	// Under the lock: waits for a batch being written by the worker.
+	std::lock_guard lock(databaseMutex);
 	Finished = true;
 	Writer().finish();
 }
@@ -354,6 +363,7 @@ void initialize() {
 	try {
 		storage.open_forever();
 	} catch (const std::exception &ex) {
+		Connection = nullptr; // Closed after each operation then.
 		LOG(("Failed to keep database open: %1").arg(ex.what()));
 	}
 }
