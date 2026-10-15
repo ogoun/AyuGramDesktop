@@ -19,6 +19,7 @@ https://github.com/telegramdesktop/tdesktop/blob/master/LEGAL
 #include "window/window_session_controller.h"
 #include "window/main_window.h"
 #include "main/main_session.h"
+#include "data/data_session.h"
 #include "core/application.h"
 #include "styles/style_info.h"
 #include "styles/style_layers.h"
@@ -79,7 +80,8 @@ void LayerWidget::floatPlayerEnumerateSections(Fn<void(
 }
 
 bool LayerWidget::floatPlayerIsVisible(not_null<HistoryItem*> item) {
-	return false;
+	// AyuGram: a video message played inside the shared media of the layer.
+	return _controller->session().data().queryItemVisibility(item);
 }
 
 void LayerWidget::floatPlayerDoubleClickEvent(
@@ -88,6 +90,12 @@ void LayerWidget::floatPlayerDoubleClickEvent(
 }
 
 void LayerWidget::setupHeightConsumers() {
+	// AyuGram: the shared media list scrolled, recheck the float player.
+	_controller->floatPlayerAreaUpdates(
+	) | rpl::on_next([=] {
+		floatPlayerAreaUpdated();
+	}, lifetime());
+
 	Expects(_contentWrap != nullptr);
 
 	_contentWrap->scrollTillBottomChanges(

@@ -22,6 +22,9 @@
 #include "main/main_session.h"
 #include "media/audio/media_audio.h"
 #include "media/player/media_player_instance.h"
+#include "media/streaming/media_streaming_instance.h"
+#include "media/streaming/media_streaming_player.h"
+#include "ui/image/image_prepare.h"
 #include "overview/overview_layout_delegate.h"
 #include "ui/image/image.h"
 #include "ui/text/format_song_document_name.h"
@@ -640,9 +643,28 @@ void VoiceMessage::validateRoundThumbnail() {
 
 void VoiceMessage::paintRound(QPainter &p, bool selected, bool showPause) {
 	const auto circle = roundRect();
-	validateRoundThumbnail();
 	p.setPen(Qt::NoPen);
-	if (!_roundThumb.isNull()) {
+	// Played right here, like in a chat (the float player stays hidden
+	// while the list reports the message as visible).
+	const auto streamed = ::Media::Player::instance()->roundVideoStreamed(
+		parent());
+	if (streamed) {
+		const auto ratio = style::DevicePixelRatio();
+		const auto outer = circle.size() * ratio;
+		if (_roundMask.size() != outer) {
+			_roundMask = Images::EllipseMask(circle.size());
+		}
+		auto request = ::Media::Streaming::FrameRequest{
+			.outer = outer,
+			.mask = _roundMask,
+			.blurredBackground = true,
+		};
+		const auto frame = streamed->frameWithInfo(request);
+		p.drawImage(circle, frame.image);
+		if (!streamed->paused()) {
+			streamed->markFrameShown();
+		}
+	} else if (validateRoundThumbnail(); !_roundThumb.isNull()) {
 		p.drawPixmap(circle.topLeft(), _roundThumb);
 	} else {
 		PainterHighQualityEnabler hq(p);
@@ -654,7 +676,9 @@ void VoiceMessage::paintRound(QPainter &p, bool selected, bool showPause) {
 		p.setBrush(st::overviewPhotoSelectOverlay);
 		p.drawEllipse(circle);
 	}
-	paintButton(p, buttonRect(), selected, showPause, true);
+	if (!streamed || streamed->paused() || selected) {
+		paintButton(p, buttonRect(), selected, showPause, true);
+	}
 
 	// Duration (or played time) like in a chat.
 	const auto &padding = st::ayuRoundStatusPadding;

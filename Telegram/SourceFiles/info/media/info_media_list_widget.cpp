@@ -246,8 +246,10 @@ void ListWidget::start() {
 			restart();
 		}, lifetime());
 
-		if (_provider->type() == Type::File) {
+		if (_provider->type() == Type::File
+			|| _provider->type() == Type::RoundVoiceFile) {
 			// For downloads manager.
+			// AyuGram: and for video messages played in the list.
 			session().data().itemVisibilityQueries(
 			) | rpl::filter([=](
 					const Data::Session::ItemVisibilityQuery &query) {
@@ -1073,6 +1075,11 @@ void ListWidget::visibleTopBottomUpdated(
 	}
 	_visibleTop = visibleTop;
 	_visibleBottom = visibleBottom;
+
+	// AyuGram: a playing video message scrolled out shows the float player.
+	if (_provider->type() == Type::RoundVoiceFile) {
+		_controller->parentController()->floatPlayerAreaUpdated();
+	}
 
 	checkMoveToOtherViewer();
 	clearHeavyItems();

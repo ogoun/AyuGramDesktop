@@ -134,6 +134,7 @@ private:
 	Ui::Text::String _details;
 	Ui::Text::String _caption;
 	QPixmap _roundThumb;
+	QImage _roundMask;
 	bool _roundThumbGood = false;
 	int _nameVersion = 0;
 

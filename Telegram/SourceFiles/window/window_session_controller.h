@@ -508,6 +508,10 @@ public:
 	}
 	bool isGifPausedAtLeastFor(GifPauseReason reason) const;
 	void floatPlayerAreaUpdated();
+	// AyuGram: for float player delegates other than the main widget.
+	[[nodiscard]] rpl::producer<> floatPlayerAreaUpdates() const {
+		return _floatPlayerAreaUpdates.events();
+	}
 
 	struct ColumnLayout {
 		int bodyWidth = 0;
@@ -845,6 +849,7 @@ private:
 
 	GifPauseReasons _gifPauseReasons = 0;
 	rpl::event_stream<> _gifPauseLevelChanged;
+	rpl::event_stream<> _floatPlayerAreaUpdates; // AyuGram
 
 	// Depends on _gifPause*.
 	const std::unique_ptr<ChatHelpers::TabbedSelector> _tabbedSelector;

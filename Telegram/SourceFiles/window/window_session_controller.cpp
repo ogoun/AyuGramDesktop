@@ -2620,6 +2620,7 @@ void SessionController::floatPlayerAreaUpdated() {
 	if (const auto main = widget()->sessionContent()) {
 		main->floatPlayerAreaUpdated();
 	}
+	_floatPlayerAreaUpdates.fire({});
 }
 
 int SessionController::dialogsSmallColumnWidth() const {
