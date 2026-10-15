@@ -81,6 +81,9 @@ public:
 	~Provider() override;
 
 	Type type() override;
+	bool ayuFileTiles() override {
+		return true; // AyuGram
+	}
 	bool hasSelectRestriction() override;
 	rpl::producer<bool> hasSelectRestrictionChanges() override;
 	bool isPossiblyMyItem(not_null<const HistoryItem*> item) override;

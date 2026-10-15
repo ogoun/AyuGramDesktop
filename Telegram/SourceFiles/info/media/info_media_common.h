@@ -127,6 +127,10 @@ public:
 class ListProvider {
 public:
 	[[nodiscard]] virtual Type type() = 0;
+	// AyuGram: files are shown as tiles (zoomable grid).
+	[[nodiscard]] virtual bool ayuFileTiles() {
+		return false;
+	}
 	[[nodiscard]] virtual bool hasSelectRestriction() = 0;
 	[[nodiscard]] virtual auto hasSelectRestrictionChanges()
 		->rpl::producer<bool> = 0;

@@ -75,6 +75,11 @@ public:
 
 	[[nodiscard]] virtual bool selectionConsumesClick(QPoint point) const;
 
+	// AyuGram: laid out in the grid like photos (files shown as tiles).
+	[[nodiscard]] virtual bool ayuGridTile() const {
+		return false;
+	}
+
 	void clickHandlerActiveChanged(const ClickHandlerPtr &action, bool active) override;
 	void clickHandlerPressedChanged(const ClickHandlerPtr &action, bool pressed) override;
 

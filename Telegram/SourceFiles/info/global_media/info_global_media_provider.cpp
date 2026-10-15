@@ -26,6 +26,7 @@ https://github.com/telegramdesktop/tdesktop/blob/master/LEGAL
 #include "core/application.h"
 #include "storage/storage_shared_media.h"
 #include "layout/layout_selection.h"
+#include "ayu/ui/overview/ayu_overview_layout.h" // AyuGram
 #include "styles/style_overview.h"
 
 namespace Info::GlobalMedia {
@@ -681,11 +682,8 @@ std::unique_ptr<Media::BaseLayout> Provider::createLayout(
 		return nullptr;
 	case Type::File:
 		if (const auto file = getFile()) {
-			return std::make_unique<Document>(
-				delegate,
-				item,
-				DocumentFields{ .document = file },
-				songSt);
+			// AyuGram: files as tiles, like photos.
+			return std::make_unique<FileTile>(delegate, item, file);
 		}
 		return nullptr;
 	case Type::MusicFile:
@@ -699,7 +697,8 @@ std::unique_ptr<Media::BaseLayout> Provider::createLayout(
 		return nullptr;
 	case Type::RoundVoiceFile:
 		if (const auto file = getFile()) {
-			return std::make_unique<Voice>(delegate, item, file, songSt);
+			// AyuGram: voice and video messages as in a chat.
+			return std::make_unique<VoiceMessage>(delegate, item, file);
 		}
 		return nullptr;
 	case Type::Link:

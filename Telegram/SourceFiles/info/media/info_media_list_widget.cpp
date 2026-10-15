@@ -73,6 +73,7 @@ https://github.com/telegramdesktop/tdesktop/blob/master/LEGAL
 #include "core/file_utilities.h"
 #include "core/application.h"
 #include "ui/toast/toast.h"
+#include "ayu/ui/overview/ayu_overview_layout.h" // AyuGram
 #include "styles/style_info.h"
 #include "styles/style_layers.h"
 #include "styles/style_menu_icons.h"
@@ -2502,6 +2503,9 @@ void ListWidget::performDrag() {
 			if (const auto file = dynamic_cast<Overview::Layout::Document*>(
 					layout)) {
 				pixmap = Ui::PixmapFromImage(file->dragPreviewImage());
+			} else if (const auto tile = dynamic_cast<
+					Overview::Layout::FileTile*>(layout)) { // AyuGram
+				pixmap = Ui::PixmapFromImage(tile->dragPreviewImage());
 			}
 		}
 	} else {

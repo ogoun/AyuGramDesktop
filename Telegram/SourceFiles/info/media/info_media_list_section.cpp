@@ -63,6 +63,21 @@ int ListSection::bottom() const {
 	return top() + height();
 }
 
+namespace {
+
+// AyuGram: files shown as tiles are laid out like photos.
+[[nodiscard]] Type LayoutType(
+		Type type,
+		const std::vector<not_null<BaseLayout*>> &items) {
+	return (type == Type::File
+		&& !items.empty()
+		&& items.front()->ayuGridTile())
+		? Type::Photo
+		: type;
+}
+
+} // namespace
+
 bool ListSection::isOneColumn() const {
 	return _itemsInRow == 1;
 }
@@ -427,7 +442,7 @@ void ListSection::resizeToWidth(int newWidth) {
 			item->resizeGetHeight(_itemWidth - rightPadding);
 		}
 	};
-	switch (_type) {
+	switch (LayoutType(_type, _items)) {
 	case Type::Photo:
 	case Type::Video:
 	case Type::PhotoVideo:
@@ -468,7 +483,7 @@ void ListSection::resizeToWidth(int newWidth) {
 int ListSection::recountHeight() {
 	auto result = headerHeight();
 
-	switch (_type) {
+	switch (LayoutType(_type, _items)) {
 	case Type::Photo:
 	case Type::Video:
 	case Type::PhotoVideo:

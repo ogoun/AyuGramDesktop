@@ -14,6 +14,7 @@ https://github.com/telegramdesktop/tdesktop/blob/master/LEGAL
 #include "ui/ui_utility.h"
 #include "styles/style_info.h"
 #include "styles/style_overview.h"
+#include "styles/style_ayu_styles.h" // AyuGram
 
 namespace Info::Media {
 namespace {
@@ -34,6 +35,9 @@ ListZoom::ListZoom(not_null<ListWidget*> list)
 }
 
 bool ListZoom::isZoomable() const {
+	if (_list->_provider->type() == Type::File) {
+		return _list->_provider->ayuFileTiles(); // AyuGram
+	}
 	switch (_list->_provider->type()) {
 	case Type::Photo:
 	case Type::Video:
@@ -60,6 +64,8 @@ int ListZoom::minGridSizeForStep(int step) const {
 	case Type::PhotoVideo:
 	case Type::RoundFile:
 		return std::max(base, minVideoGridSize());
+	case Type::File: // AyuGram: a tile has the name and the size.
+		return std::max(base, st::ayuFileTileMinSize);
 	default:
 		return base;
 	}

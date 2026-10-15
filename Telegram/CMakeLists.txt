@@ -136,6 +136,8 @@ set(ayugram_files
         ayu/utils/rc_manager.cpp
         ayu/utils/rc_manager.h
         ayu/ui/ayu_logo.cpp
+        ayu/ui/overview/ayu_overview_layout.cpp
+        ayu/ui/overview/ayu_overview_layout.h
         ayu/ui/ayu_logo.h
         ayu/ui/toasts.cpp
         ayu/ui/toasts.h
