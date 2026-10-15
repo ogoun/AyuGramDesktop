@@ -209,7 +209,9 @@ void Provider::checkPreload(
 	const auto visibleWidth = viewport.width();
 	const auto visibleHeight = viewport.height();
 	const auto preloadedHeight = kPreloadedScreensCountFull * visibleHeight;
-	const auto minItemHeight = Media::MinItemHeight(_type, visibleWidth);
+	const auto minItemHeight = (_type == Type::File && ayuFileTiles())
+		? Media::MinFileTileHeight(visibleWidth) // AyuGram
+		: Media::MinItemHeight(_type, visibleWidth);
 	const auto preloadedCount = preloadedHeight / minItemHeight;
 	const auto preloadIdsLimitMin = (preloadedCount / 2) + 1;
 	const auto preloadIdsLimit = preloadIdsLimitMin

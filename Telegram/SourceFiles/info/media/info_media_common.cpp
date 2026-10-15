@@ -10,6 +10,7 @@ https://github.com/telegramdesktop/tdesktop/blob/master/LEGAL
 #include "history/history_item.h"
 #include "storage/storage_shared_media.h"
 #include "styles/style_info.h"
+#include "styles/style_ayu_styles.h" // AyuGram
 #include "styles/style_overview.h"
 
 namespace Info::Media {
@@ -57,6 +58,12 @@ bool ChangeItemSelection(
 		return changeExisting(i);
 	}
 	return changeExisting(selected.find(item));
+}
+
+int MinFileTileHeight(int width) {
+	const auto size = st::ayuFileTileSmallestSize + st::infoMediaSkip;
+	const auto inRow = std::max((width - st::infoMediaSkip) / size, 1);
+	return std::max(size / inRow, 1);
 }
 
 int MinItemHeight(Type type, int width) {

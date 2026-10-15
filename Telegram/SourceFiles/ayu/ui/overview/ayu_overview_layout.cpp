@@ -27,6 +27,8 @@
 #include "ui/text/format_song_document_name.h"
 #include "ui/text/format_values.h"
 #include "ui/text/text_options.h"
+#include "core/ui_integration.h"
+#include "ui/power_saving.h"
 #include "ui/painter.h"
 #include "styles/style_ayu_styles.h"
 #include "styles/style_chat.h"
@@ -63,7 +65,7 @@ void PaintCover(
 	const auto scaled = QSize(
 		std::max(int(std::ceil(width * scale)), rect.width()),
 		std::max(int(std::ceil(height * scale)), rect.height()));
-	const auto &pix = image->pix(scaled, { .options = options });
+	const auto pix = image->pixNoCache(scaled, { .options = options });
 	p.save();
 	p.setClipRect(rect);
 	p.drawPixmap(
@@ -203,6 +205,7 @@ void FileTile::paint(
 		TextSelection selection,
 		const PaintContext *context) {
 	ensureDataMediaCreated();
+	_dataMedia->automaticLoad(parent()->fullId(), parent());
 	const auto selected = (selection == FullSelection);
 	const auto displayLoading = _data->displayLoading();
 	if (displayLoading) {
@@ -303,12 +306,14 @@ TextState FileTile::getState(
 	}
 	ensureDataMediaCreated();
 	const auto loading = _data->loading() || _data->uploading();
-	if (loading) {
-		return { parent(), _cancell };
-	} else if (!dataLoaded() && buttonRect().contains(point)) {
-		return { parent(), _savel };
+	if (buttonRect().contains(point)) {
+		if (loading) {
+			return { parent(), _cancell };
+		} else if (!dataLoaded()) {
+			return { parent(), _savel };
+		}
 	}
-	return { parent(), _namel };
+	return { parent(), loading ? nullptr : _namel };
 }
 
 QImage FileTile::dragPreviewImage() {
@@ -476,19 +481,48 @@ void VoiceMessage::ensureDataMediaCreated() const {
 		return;
 	}
 	_dataMedia = _data->createMediaView();
+	if (round()) {
+		_dataMedia->thumbnailWanted(parent()->fullId());
+	}
 	delegate()->registerHeavyItem(this);
 }
 
 void VoiceMessage::clearHeavyPart() {
 	_dataMedia = nullptr;
+	_roundThumb = QPixmap();
+	_roundThumbGood = false;
 }
 
 void VoiceMessage::updateName() {
-	_name.setText(
-		st::semiboldTextStyle,
-		parent()->fromOriginal()->name(),
-		Ui::NameTextOptions());
+	if (parent()->Has<HistoryMessageForwarded>()) {
+		const auto info = parent()->originalHiddenSenderInfo();
+		const auto name = info
+			? tr::lng_forwarded(tr::now, lt_user, info->nameText().toString())
+			: parent()->fromOriginal()->isChannel()
+			? tr::lng_forwarded_channel(
+				tr::now,
+				lt_channel,
+				parent()->fromOriginal()->name())
+			: tr::lng_forwarded(
+				tr::now,
+				lt_user,
+				parent()->fromOriginal()->name());
+		_name.setText(st::semiboldTextStyle, name, Ui::NameTextOptions());
+	} else {
+		_name.setText(
+			st::semiboldTextStyle,
+			parent()->from()->name(),
+			Ui::NameTextOptions());
+	}
 	_nameVersion = parent()->fromOriginal()->nameVersion();
+	_caption.setMarkedText(
+		st::defaultTextStyle,
+		parent()->originalText(),
+		Ui::DialogTextOptions(),
+		Core::TextContext({
+			.session = &parent()->history()->session(),
+			.repaint = [=] { delegate()->repaintItem(this); },
+		}));
 }
 
 bool VoiceMessage::updateStatusText(float64 &progress) {
@@ -582,19 +616,34 @@ void VoiceMessage::paintButton(
 	icon->paintInCenter(p, inner);
 }
 
+void VoiceMessage::validateRoundThumbnail() {
+	const auto circle = roundRect();
+	const auto ratio = style::DevicePixelRatio();
+	const auto sizeChanged = (_roundThumb.width()
+		!= circle.width() * ratio);
+	const auto thumbnail = _dataMedia->thumbnail();
+	if (!sizeChanged && (_roundThumbGood || (!thumbnail && !_roundThumb.isNull()))) {
+		return;
+	}
+	const auto blurred = _dataMedia->thumbnailInline();
+	if (!thumbnail && !blurred) {
+		_roundThumb = QPixmap();
+		return;
+	}
+	const auto options = Images::Option::RoundCircle
+		| (thumbnail ? Images::Options() : Images::Option::Blur);
+	_roundThumb = (thumbnail ? thumbnail : blurred)->pixNoCache(
+		circle.size(),
+		{ .options = options });
+	_roundThumbGood = (thumbnail != nullptr);
+}
+
 void VoiceMessage::paintRound(QPainter &p, bool selected, bool showPause) {
 	const auto circle = roundRect();
-	const auto thumbnail = _dataMedia->thumbnail();
-	const auto blurred = _dataMedia->thumbnailInline();
+	validateRoundThumbnail();
 	p.setPen(Qt::NoPen);
-	if (thumbnail || blurred) {
-		const auto options = Images::Option::RoundCircle
-			| (thumbnail ? Images::Options() : Images::Option::Blur);
-		p.drawPixmap(
-			circle.topLeft(),
-			(thumbnail ? thumbnail : blurred)->pix(
-				circle.size(),
-				{ .options = options }));
+	if (!_roundThumb.isNull()) {
+		p.drawPixmap(circle.topLeft(), _roundThumb);
 	} else {
 		PainterHighQualityEnabler hq(p);
 		p.setBrush(st::imageBg);
@@ -609,7 +658,10 @@ void VoiceMessage::paintRound(QPainter &p, bool selected, bool showPause) {
 
 	// Duration (or played time) like in a chat.
 	const auto &padding = st::ayuRoundStatusPadding;
-	const auto text = _status.text();
+	const auto text = (_status.size() == Ui::FileStatusSizeReady
+		|| _status.size() == Ui::FileStatusSizeLoaded)
+		? Ui::FormatDurationText(_data->duration() / 1000)
+		: _status.text();
 	const auto width = st::normalFont->width(text);
 	const auto status = QRect(
 		circle.x() + st::ayuRoundStatusSkip,
@@ -744,19 +796,45 @@ void VoiceMessage::paint(
 		p.setPen(selected ? st::mediaInFgSelected : st::mediaInFg);
 		const auto status = _status.text();
 		p.drawTextLeft(left, top, _width, status);
+		auto captionLeft = left
+			+ st::normalFont->width(status)
+			+ st::mediaUnreadSkip;
 		if (parent()->hasUnreadMediaFlag()) {
-			const auto x = left
-				+ st::normalFont->width(status)
-				+ st::mediaUnreadSkip;
 			p.setPen(Qt::NoPen);
 			p.setBrush(selected ? st::msgFileInBgSelected : st::msgFileInBg);
 			PainterHighQualityEnabler hq(p);
 			p.drawEllipse(QRect(
-				x,
+				captionLeft,
 				top + st::mediaUnreadTop,
 				st::mediaUnreadSize,
 				st::mediaUnreadSize));
+			captionLeft += st::mediaUnreadSize + st::mediaUnreadSkip;
 		}
+		const auto captionWidth = left + available - captionLeft;
+		if (!_caption.isEmpty() && captionWidth > 0) {
+			p.setPen(st::historyFileNameInFg);
+			_caption.draw(p, Ui::Text::PaintContext{
+				.position = QPoint(captionLeft, top),
+				.availableWidth = captionWidth,
+				.spoiler = Ui::Text::DefaultSpoilerCache(),
+				.paused = context
+					? context->paused
+					: On(PowerSaving::kEmojiChat),
+				.pausedEmoji = On(PowerSaving::kEmojiChat),
+				.pausedSpoiler = On(PowerSaving::kChatSpoiler),
+				.elisionLines = 1,
+			});
+		}
+	} else if (parent()->hasUnreadMediaFlag()) {
+		const auto x = left + available - st::mediaUnreadSize;
+		p.setPen(Qt::NoPen);
+		p.setBrush(selected ? st::msgFileInBgSelected : st::msgFileInBg);
+		PainterHighQualityEnabler hq(p);
+		p.drawEllipse(QRect(
+			x,
+			textTop() + (st::semiboldFont->height - st::mediaUnreadSize) / 2,
+			st::mediaUnreadSize,
+			st::mediaUnreadSize));
 	}
 
 	const auto button = round() ? roundRect() : buttonRect();
@@ -774,6 +852,7 @@ void VoiceMessage::paint(
 bool VoiceMessage::elementsAnimating() const {
 	return RadialProgressItem::elementsAnimating()
 		|| _details.hasPersistentAnimation()
+		|| _caption.hasPersistentAnimation()
 		|| Playing(_data, parent()->fullId());
 }
 
@@ -797,11 +876,19 @@ TextState VoiceMessage::getState(
 	const auto top = textTop();
 	const auto available = _width - left - st::ayuVoicePadding.right();
 	const auto nameWidth = std::min(available, _name.maxWidth());
+	if (QRect(left, top, nameWidth, st::semiboldFont->height).contains(point)
+		&& !_data->loading()) {
+		return { parent(), _openl };
+	}
 	const auto dateLeft = left + nameWidth + st::ayuVoiceTextSkip;
 	const auto dateTop = top
 		+ (st::semiboldFont->height - st::normalFont->height);
-	if (QRect(dateLeft, dateTop, _details.maxWidth(), st::normalFont->height)
-		.contains(point)) {
+	const auto dateWidth = std::min(
+		_details.maxWidth(),
+		left + available - dateLeft);
+	if (dateWidth > 0
+		&& QRect(dateLeft, dateTop, dateWidth, st::normalFont->height)
+			.contains(point)) {
 		const auto state = _details.getStateLeft(
 			point - QPoint(dateLeft, dateTop),
 			_width,
@@ -815,8 +902,15 @@ TextState VoiceMessage::getState(
 }
 
 bool VoiceMessage::selectionConsumesClick(QPoint point) const {
-	const auto media = round() ? roundRect() : buttonRect();
-	return !media.contains(point);
+	if (round()) {
+		const auto circle = roundRect();
+		const auto center = QPointF(circle.center());
+		const auto radius = circle.width() / 2.;
+		const auto dx = point.x() - center.x();
+		const auto dy = point.y() - center.y();
+		return (dx * dx + dy * dy > radius * radius);
+	}
+	return !buttonRect().contains(point);
 }
 
 float64 VoiceMessage::dataProgress() const {

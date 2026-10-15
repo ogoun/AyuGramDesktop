@@ -127,6 +127,8 @@ ayuServiceTimeBadgeLastLineWidthAdd: 9px;
 
 // Shared media: files as tiles, voice / video messages as in a chat.
 ayuFileTileMinSize: 120px;
+ayuFileTileSmallestSize: 88px;
+ayuFileTileZoomStep: 24px;
 ayuFileTileMaxSize: 480px;
 ayuFileTilePadding: margins(8px, 5px, 8px, 6px);
 ayuFileTileExtFont: font(22px semibold);

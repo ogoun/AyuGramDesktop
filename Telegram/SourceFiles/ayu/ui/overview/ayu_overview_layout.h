@@ -114,6 +114,7 @@ private:
 	// played part of the message.
 	bool updateStatusText(float64 &progress);
 	void paintRound(QPainter &p, bool selected, bool showPause);
+	void validateRoundThumbnail();
 	void paintButton(
 		QPainter &p,
 		QRect inner,
@@ -131,6 +132,9 @@ private:
 	StatusText _status;
 	Ui::Text::String _name;
 	Ui::Text::String _details;
+	Ui::Text::String _caption;
+	QPixmap _roundThumb;
+	bool _roundThumbGood = false;
 	int _nameVersion = 0;
 
 };

@@ -65,7 +65,9 @@ int ListZoom::minGridSizeForStep(int step) const {
 	case Type::RoundFile:
 		return std::max(base, minVideoGridSize());
 	case Type::File: // AyuGram: a tile has the name and the size.
-		return std::max(base, st::ayuFileTileMinSize);
+		return std::max(
+			st::ayuFileTileMinSize + step * st::ayuFileTileZoomStep,
+			st::ayuFileTileSmallestSize);
 	default:
 		return base;
 	}

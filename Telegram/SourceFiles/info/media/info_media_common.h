@@ -200,5 +200,7 @@ public:
 };
 
 [[nodiscard]] int MinItemHeight(Type type, int width);
+// AyuGram: files shown as tiles (ListProvider::ayuFileTiles).
+[[nodiscard]] int MinFileTileHeight(int width);
 
 } // namespace Info::Media
