@@ -140,4 +140,3 @@ ayuVoiceLineSkip: 4px;
 ayuVoiceWaveformWidth: 280px;
 ayuRoundStatusPadding: margins(7px, 2px, 7px, 3px);
 ayuRoundStatusSkip: 8px;
-
