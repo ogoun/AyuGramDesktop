@@ -49,6 +49,7 @@ private:
 	std::unique_ptr<Ui::FlatLabel> _performer;
 	std::unique_ptr<Ui::FlatLabel> _title;
 	std::shared_ptr<Data::DocumentMedia> _mediaView;
+	rpl::lifetime _coverLifetime; // AyuGram: one cover wait at a time.
 	std::optional<ResultCover> _currentCover;
 	rpl::event_stream<> _onReady;
 

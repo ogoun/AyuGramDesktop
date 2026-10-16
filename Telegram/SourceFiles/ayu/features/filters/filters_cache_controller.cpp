@@ -38,6 +38,10 @@ rpl::producer<> updates() {
 std::shared_ptr<const Cache> cache;
 
 std::unordered_map<long long, std::unordered_map<int64, bool>> filteredMessages;
+// AyuGram: results are recomputed lazily, the map is dropped when it grows
+// past the limit (it was never pruned and grew with every message seen).
+constexpr auto kMaxFilteredMessages = 100000;
+int filteredMessagesCount = 0;
 std::unordered_set<BareId> dialogsWithHiddenBlockedMessages; // purely for show / hide filtered messages
 
 std::shared_ptr<const Cache> buildCache() {
@@ -95,6 +99,7 @@ void rebuildCache() {
 		std::lock_guard filteredLock(filteredMessagesMutex);
 		cache = std::move(next);
 		filteredMessages.clear();
+		filteredMessagesCount = 0;
 		dialogsWithHiddenBlockedMessages.clear();
 	}
 }
@@ -190,6 +195,10 @@ void putFiltered(
 	}
 
 	std::lock_guard filteredLock(filteredMessagesMutex);
+	if (++filteredMessagesCount > kMaxFilteredMessages) {
+		filteredMessages.clear();
+		filteredMessagesCount = 1;
+	}
 	filteredMessages[item->history()->peer->id.value][item->id.bare] = res;
 	if (group && res) {
 		for (const auto& groupItem : group->items) {

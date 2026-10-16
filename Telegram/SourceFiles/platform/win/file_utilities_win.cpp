@@ -114,7 +114,11 @@ HBITMAP IconToBitmap(LPWSTR icon, int iconindex) {
 
 	DestroyIcon(ico);
 
-	return (HBITMAP)CopyImage(result, IMAGE_BITMAP, 0, 0, LR_DEFAULTSIZE | LR_CREATEDIBSECTION);
+	// AyuGram: the copy is the result, the original bitmap leaked a GDI
+	// object per handler each time the "Open With" menu was shown.
+	const auto copy = (HBITMAP)CopyImage(result, IMAGE_BITMAP, 0, 0, LR_DEFAULTSIZE | LR_CREATEDIBSECTION);
+	DeleteObject(result);
+	return copy;
 }
 
 bool ShouldSaveZoneInformation() {

@@ -399,10 +399,16 @@ void subscribeToCloudThemeLoad(
 		}
 	};
 
+	// AyuGram: stop listening once found (they stayed for the session).
+	const auto notFound = [=] { return !*found && weak; };
 	session->data().cloudThemes().chatThemesUpdated(
-	) | rpl::on_next(tryFind, controller->lifetime());
+	) | rpl::take_while(notFound) | rpl::on_next(
+		tryFind,
+		controller->lifetime());
 	session->data().cloudThemes().updated(
-	) | rpl::on_next(tryFind, controller->lifetime());
+	) | rpl::take_while(notFound) | rpl::on_next(
+		tryFind,
+		controller->lifetime());
 }
 
 }

@@ -19,6 +19,8 @@
 #include <QtNetwork/QNetworkReply>
 #include <QtNetwork/QNetworkRequest>
 
+#include <mutex>
+
 namespace Ayu::Ui::Itunes {
 namespace {
 
@@ -30,6 +32,19 @@ struct CacheEntry
 QCache<QString, CacheEntry> &cache() {
 	static QCache<QString, CacheEntry> c(50);
 	return c;
+}
+
+// AyuGram: FetchCover runs on thread pool workers, the cache is shared.
+std::mutex &cacheMutex() {
+	static std::mutex m;
+	return m;
+}
+
+// AyuGram: one manager per worker thread, reused. A manager per request
+// started (and stopped, blocking the worker) an HTTP thread every time.
+QNetworkAccessManager &threadNetworkManager() {
+	thread_local const auto manager = new QNetworkAccessManager();
+	return *manager;
 }
 
 QString translitSafe(const QString &s) {
@@ -640,7 +655,7 @@ std::unique_ptr<QNetworkReply, void(*)(QNetworkReply *)> execWithTimeout(
 }
 
 QByteArray getBytesWithTimeout(const QUrl &url, int timeoutMs, QByteArray *contentTypeOut = nullptr) {
-	QNetworkAccessManager nam;
+	auto &nam = threadNetworkManager();
 	QNetworkRequest req(url);
 	req.setAttribute(QNetworkRequest::RedirectPolicyAttribute, QNetworkRequest::NoLessSafeRedirectPolicy);
 	auto replyPtr = execWithTimeout(nam, req, timeoutMs);
@@ -719,8 +734,11 @@ QPixmap FetchCover(const QString &performer, const QString &title, int sizeHintP
 	if (perf.isEmpty() && titl.isEmpty()) return {};
 
 	const auto key = perf + QString::fromUtf8(" - ") + titl;
-	if (auto *entry = cache().object(key)) {
-		return entry->pix;
+	{
+		std::lock_guard lock(cacheMutex());
+		if (auto *entry = cache().object(key)) {
+			return entry->pix;
+		}
 	}
 
 	const auto url = buildItunesUrl(perf, titl);
@@ -743,7 +761,10 @@ QPixmap FetchCover(const QString &performer, const QString &title, int sizeHintP
 	QPixmap pix = QPixmap::fromImage(img);
 
 	auto *stored = new CacheEntry{pix};
-	cache().insert(key, stored);
+	{
+		std::lock_guard lock(cacheMutex());
+		cache().insert(key, stored);
+	}
 	return pix;
 }
 

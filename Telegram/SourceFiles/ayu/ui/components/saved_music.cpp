@@ -224,6 +224,8 @@ void AyuMusicButton::updateData(MusicButtonData data) {
 }
 
 void AyuMusicButton::downloadAndMakeCover(FullMsgId msgId) {
+	// AyuGram: updateData() called again replaces the previous wait.
+	_coverLifetime.destroy();
 	if (_mediaView && _mediaView->owner()->isSongWithCover() && !_mediaView->thumbnail()) {
 		const auto settings = &_mediaView->owner()->session().settings().autoDownload();
 		// Data::AutoDownload::Type::Music always returns false
@@ -238,7 +240,7 @@ void AyuMusicButton::downloadAndMakeCover(FullMsgId msgId) {
 					makeCover();
 				}
 				return !_mediaView->thumbnail();
-			}) | rpl::start(lifetime());
+			}) | rpl::start(_coverLifetime);
 			return;
 		}
 	}
