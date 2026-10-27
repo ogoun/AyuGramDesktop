@@ -133,6 +133,8 @@ set(ayugram_files
         ayu/utils/telegram_helpers.h
         ayu/utils/windows_utils.cpp
         ayu/utils/windows_utils.h
+        ayu/utils/win_user_objects_tracker.cpp
+        ayu/utils/win_user_objects_tracker.h
         ayu/utils/rc_manager.cpp
         ayu/utils/rc_manager.h
         ayu/ui/ayu_logo.cpp

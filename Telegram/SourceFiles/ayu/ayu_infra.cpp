@@ -12,8 +12,10 @@
 #include "ayu/ayu_worker.h"
 #include "ayu/data/ayu_database.h"
 #include "ayu/ui/ayu_logo.h"
+#include "ayu/utils/win_user_objects_tracker.h"
 #include "features/translator/ayu_translator.h"
 #include "lang/lang_instance.h"
+#include "settings.h"
 #include "ui/chat/chat_style_radius.h"
 #include "utils/rc_manager.h"
 
@@ -67,7 +69,12 @@ void initIcon() {
 #endif
 }
 
+void initDiagnostics() {
+	AyuDiagnostics::InstallUserObjectsTracker(cWorkingDir());
+}
+
 void init() {
+	initDiagnostics();
 	initLang();
 	initDatabase();
 	initUiSettings();
