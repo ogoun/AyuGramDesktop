@@ -23,7 +23,6 @@ https://github.com/telegramdesktop/tdesktop/blob/master/LEGAL
 #include "lang/lang_instance.h"
 #include "lang/lang_cloud_manager.h"
 #include "base/unixtime.h"
-#include "base/call_delayed.h"
 #include "base/timer.h"
 #include "base/network_reachability.h"
 #include "test/test_rpc_retry.h"
